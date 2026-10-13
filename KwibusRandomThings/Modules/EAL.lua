@@ -1,20 +1,10 @@
+KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
 local ADDON_NAME = KRT.name
 
--- Fallback arrays just in case the dynamic raid checks fail
-local TRIAL_ZONES = {
-    [638] = true, [639] = true, [643] = true,
-    [502] = true, [642] = true, [551] = true, [635] = true,
-    [725] = true, [975] = true, [1000] = true, [1051] = true,
-    [1121] = true, [1196] = true, [1205] = true, [1268] = true,
-    [1344] = true, [1436] = true,
-}
-
-local ARENA_ZONES = {
-    [636] = true, [677] = true, [1082] = true,
-    [1227] = true, [1478] = true,
-}
+local TRIAL_ZONES = KRT.TRIAL_ZONES
+local ARENA_ZONES = KRT.ARENA_ZONES
 
 local DEFAULTS = { eal = {
     enabled = true,
@@ -39,15 +29,11 @@ KRT.EAL = {
     indicatorFragment = nil,
     lastKnownLogState = nil,
     refreshCounter = 0,
+    _updateLoopRegistered = false,
 }
-local self = KRT.EAL
 
--- SAFE SV fetcher
 local function SV() 
-    if KRT.sv and type(KRT.sv.eal) == "table" then 
-        return KRT.sv.eal 
-    end
-    return DEFAULTS.eal 
+    return KRT.GetModuleSV("eal", DEFAULTS.eal)
 end
 
 local function PrintChatNotification(message)
@@ -137,9 +123,27 @@ local function ShouldLogHere()
     return false
 end
 
+function KRT.EAL:UpdateLoopState()
+    local sv = SV()
+    local shouldRun = sv and sv.enabled
+    if shouldRun then
+        if not self._updateLoopRegistered then
+            self._updateLoopRegistered = true
+            EM:RegisterForUpdate(ADDON_NAME .. "_EALUpdateLoop", 1000, function() self:OnUpdate() end)
+        end
+    else
+        if self._updateLoopRegistered then
+            self._updateLoopRegistered = false
+            EM:UnregisterForUpdate(ADDON_NAME .. "_EALUpdateLoop")
+        end
+    end
+end
+
 function KRT.EAL:UpdateIndicatorState()
     local w = self.indicator
     if not w then return end
+
+    self:UpdateLoopState()
 
     local sv = SV()
 
@@ -218,6 +222,7 @@ function KRT.EAL:EvaluateAndApplyLogState()
 end
 
 function KRT.EAL:Refresh()
+    if not SV().enabled then return end
     self.refreshCounter = (self.refreshCounter or 0) + 1
     local currentCounter = self.refreshCounter
     local delay = (SV().delaySeconds or 5) * 1000
@@ -241,6 +246,7 @@ function KRT.EAL:Refresh()
 end
 
 function KRT.EAL:OnUpdate()
+    if not SV().enabled then return end
     local isLogging = IsEncounterLogEnabled()
     if self.lastKnownLogState ~= isLogging then
         self.lastKnownLogState = isLogging
@@ -278,7 +284,7 @@ function KRT.EAL:CenterIndicator(axis)
 end
 
 function KRT.EAL:Initialize()
-    self.indicator = EncounterAutoLogIndicator or WINDOW_MANAGER:GetControlByName("EncounterAutoLogIndicator")
+    self.indicator = KwibusEncounterAutoLogIndicator or WINDOW_MANAGER:GetControlByName("KwibusEncounterAutoLogIndicator")
     
     if not self.indicator then 
         d("[Kwibus Auto Log] ERROR: Could not link to XML frame. Settings will not work.")
@@ -291,7 +297,6 @@ function KRT.EAL:Initialize()
 
     self.lastKnownLogState = IsEncounterLogEnabled()
 
-    EM:RegisterForUpdate(ADDON_NAME .. "_EALUpdateLoop", 1000, function() self:OnUpdate() end)
     EM:RegisterForEvent(ADDON_NAME .. "_EALPlayerActivated", EVENT_PLAYER_ACTIVATED, function() self:Refresh() end)
     EM:RegisterForEvent(ADDON_NAME .. "_EALZoneChanged", EVENT_ZONE_CHANGED, function() self:Refresh() end)
 
@@ -315,6 +320,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().enabled end,
                 setFunc = function(v) 
                     SV().enabled = v
+                    self:UpdateLoopState()
                     if not v then
                         self:UpdateIndicatorState() 
                     else
@@ -322,6 +328,7 @@ function KRT.EAL:GetLAMSubmenu()
                     end
                 end,
                 default = DEFAULTS.eal.enabled,
+                width = "full",
             },
             {
                 type = "checkbox",
@@ -329,6 +336,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().showIndicator end,
                 setFunc = function(v) SV().showIndicator = v; self:UpdateIndicatorState() end,
                 default = DEFAULTS.eal.showIndicator,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             {
@@ -337,11 +345,35 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().chatNotifications end,
                 setFunc = function(v) SV().chatNotifications = v end,
                 default = DEFAULTS.eal.chatNotifications,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             {
+                type = "checkbox",
+                name = "Enable Repositioning (Drag)",
+                getFunc = function() return SV().indicatorUnlocked end,
+                setFunc = function(v) SV().indicatorUnlocked = v; self:UpdateIndicatorState() end,
+                default = DEFAULTS.eal.indicatorUnlocked,
+                width = "full",
+                disabled = function() return not SV().enabled or not SV().showIndicator end,
+            },
+            {
+                type = "button",
+                name = "Reset Horizontal Position",
+                func = function() self:CenterIndicator("horizontal") end,
+                width = "half",
+                disabled = function() return not SV().enabled or not SV().showIndicator or not SV().indicatorUnlocked end,
+            },
+            {
+                type = "button",
+                name = "Reset Vertical Position",
+                func = function() self:CenterIndicator("vertical") end,
+                width = "half",
+                disabled = function() return not SV().enabled or not SV().showIndicator or not SV().indicatorUnlocked end,
+            },
+            {
                 type = "slider",
-                name = "Start delay (seconds)",
+                name = "Start Delay (Seconds)",
                 tooltip = "Seconds to wait after entering a zone before evaluating and starting/stopping logging.",
                 min = 0,
                 max = 10,
@@ -349,6 +381,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().delaySeconds end,
                 setFunc = function(v) SV().delaySeconds = v end,
                 default = DEFAULTS.eal.delaySeconds,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             { type = "divider" },
@@ -359,6 +392,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().logNormal end,
                 setFunc = function(v) SV().logNormal = v; self:Refresh() end,
                 default = DEFAULTS.eal.logNormal,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             { type = "divider" },
@@ -368,6 +402,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().logTrials end,
                 setFunc = function(v) SV().logTrials = v; self:Refresh() end,
                 default = DEFAULTS.eal.logTrials,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             {
@@ -376,6 +411,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().logDungeons end,
                 setFunc = function(v) SV().logDungeons = v; self:Refresh() end,
                 default = DEFAULTS.eal.logDungeons,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             {
@@ -384,6 +420,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().logArenas end,
                 setFunc = function(v) SV().logArenas = v; self:Refresh() end,
                 default = DEFAULTS.eal.logArenas,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             {
@@ -392,6 +429,7 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().logHouses end,
                 setFunc = function(v) SV().logHouses = v; self:Refresh() end,
                 default = DEFAULTS.eal.logHouses,
+                width = "full",
                 disabled = function() return not SV().enabled end,
             },
             {
@@ -400,31 +438,8 @@ function KRT.EAL:GetLAMSubmenu()
                 getFunc = function() return SV().logPvP end,
                 setFunc = function(v) SV().logPvP = v; self:Refresh() end,
                 default = DEFAULTS.eal.logPvP,
-                disabled = function() return not SV().enabled end,
-            },
-            { type = "divider" },
-            {
-                type = "checkbox",
-                name = "Enable Reposition",
-                getFunc = function() return SV().indicatorUnlocked end,
-                setFunc = function(v) SV().indicatorUnlocked = v; self:UpdateIndicatorState() end,
-                default = DEFAULTS.eal.indicatorUnlocked,
                 width = "full",
                 disabled = function() return not SV().enabled end,
-            },
-            {
-                type = "button",
-                name = "Reset horizontal position",
-                func = function() self:CenterIndicator("horizontal") end,
-                width = "half",
-                disabled = function() return not SV().enabled or not SV().indicatorUnlocked end,
-            },
-            {
-                type = "button",
-                name = "Reset vertical position",
-                func = function() self:CenterIndicator("vertical") end,
-                width = "half",
-                disabled = function() return not SV().enabled or not SV().indicatorUnlocked end,
             },
         }
     }

@@ -1,3 +1,4 @@
+KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
 local WM = WINDOW_MANAGER
@@ -11,13 +12,20 @@ local DEFAULTS = { isi = {
     enableReposition = false,
     showArmorWeights = true,
     showArmorTraits = true,
+    colorCodedTraits = true,
+    hasForcedTraitColoringOnce = false,
     showAbilityWarning = true,
     showMissingGearWarning = true,
     showLocationTags = true,
     columnSpacing = 45,
     tagSpacing = 40,
+    nameSpacing = 180,
     showInMenus = true,
     hideInCombat = false,
+    bgOpacity = 25,
+    colorMonster = { 1, 1, 1 },
+    colorMythic = { 1, 1, 1 },
+    colorRegular = { 1, 1, 1 },
 } }
 
 KRT.ISI = {
@@ -30,13 +38,8 @@ KRT.ISI = {
     wTraitsShort = nil,
     labels = {},
 }
-local self = KRT.ISI
-
-local cachedSV = nil
 local function SV()
-    if cachedSV then return cachedSV end
-    cachedSV = KRT.sv.isi
-    return cachedSV
+    return KRT.GetModuleSV("isi", DEFAULTS.isi)
 end
 
 -- Local CP colors
@@ -51,6 +54,34 @@ local ROW_H = 21
 local STAT_COLOR = {0.925, 0.925, 1.000, 1}
 local GREEN = {0.36, 1.00, 0.36, 1}
 local RED = {1.00, 0.36, 0.36, 1}
+
+-- Trait Hex Colors (with resilient fallbacks for ESO enum variants)
+local TRAIT_HEX_COLORS = {
+    -- Core Meta Traits (High Visibility)
+    [ITEM_TRAIT_TYPE_ARMOR_DIVINES or ITEM_TRAIT_TYPE_DIVINES or 18]         = "FFD700", -- Radiant Gold
+    [ITEM_TRAIT_TYPE_ARMOR_INFUSED or ITEM_TRAIT_TYPE_INFUSED or 16]         = "00E5FF", -- Arcane Cyan
+    [ITEM_TRAIT_TYPE_ARMOR_STURDY or ITEM_TRAIT_TYPE_STURDY or 11]           = "FF9900", -- Amber Orange
+    [ITEM_TRAIT_TYPE_ARMOR_REINFORCED or ITEM_TRAIT_TYPE_REINFORCED or 13]   = "80C8FF", -- Steel Ice Blue
+    [ITEM_TRAIT_TYPE_ARMOR_WELL_FITTED or ITEM_TRAIT_TYPE_WELL_FITTED or 14] = "00FF66", -- Neon Green
+
+    -- Niche Combat
+    [ITEM_TRAIT_TYPE_ARMOR_IMPENETRABLE or ITEM_TRAIT_TYPE_IMPENETRABLE or 12]     = "FF3344", -- Crimson Red
+    [ITEM_TRAIT_TYPE_ARMOR_INVIGORATING or ITEM_TRAIT_TYPE_INVIGORATING or 25]     = "C678DD", -- Soft Orchid Purple
+    [ITEM_TRAIT_TYPE_ARMOR_NIRNHONED or ITEM_TRAIT_TYPE_NIRNHONED or 26]           = "C85A32", -- Copper Maroon
+
+    -- Progression / Economy (Muted)
+    [ITEM_TRAIT_TYPE_ARMOR_TRAINING or ITEM_TRAIT_TYPE_TRAINING or 15]   = "98C379", -- Muted Olive
+    [ITEM_TRAIT_TYPE_ARMOR_INTRICATE or ITEM_TRAIT_TYPE_INTRICATE or 20] = "828997", -- Slate Gray
+    [ITEM_TRAIT_TYPE_ARMOR_ORNATE or ITEM_TRAIT_TYPE_ORNATE or 19]       = "A07A48", -- Muted Bronze
+}
+
+local function ColorizeTrait(traitType, text)
+    local hex = TRAIT_HEX_COLORS[traitType]
+    if hex then
+        return string.format("|c%s%s|r", hex, text)
+    end
+    return text
+end
 
 -- Slots
 local ARMOR_SLOTS = {
@@ -72,6 +103,15 @@ local TWO_HANDED_WEAPON_TYPES = {
     [WEAPONTYPE_HEALING_STAFF] = true,
 }
 
+-- Sets with special viable piece thresholds where wearing fewer than the maximum pieces is a valid build choice
+local SPECIAL_SET_MIN_PIECES = {
+    [163] = 1, -- Armor of the Trainee (1pc Max Health bonus)
+    [548] = 1, -- Druid's Braid (1pc Max Health bonus)
+    [153] = 2, -- Blessing of the Potentates (2pc Ultimate Cost Reduction)
+    [181] = 2, -- Willpower (2pc Max Magicka)
+    [216] = 2, -- Eyes of Mara (2pc Max Magicka)
+}
+
 local function isTwoHanded(itemLink)
     if not itemLink or itemLink == "" then return false end
     local weaponType = GetItemLinkWeaponType(itemLink)
@@ -90,19 +130,29 @@ local function CapitalizeFirstLetter(str)
     return zo_strformat("<<C:1>>", str)
 end
 
--- Get localized full trait name dynamically from game string tables
+-- Trait name caching to eliminate string formatting and regex in sort comparators
+local _traitFullCache = {}
 local function GetArmorTraitNameFull(traitType)
     if not traitType or traitType == ITEM_TRAIT_TYPE_NONE then return "" end
-    return FormatLocalizedString(GetString("SI_ITEMTRAITTYPE", traitType))
+    local cached = _traitFullCache[traitType]
+    if cached then return cached end
+    cached = FormatLocalizedString(GetString("SI_ITEMTRAITTYPE", traitType))
+    _traitFullCache[traitType] = cached
+    return cached
 end
 
--- Get localized short trait representation
+-- Get localized short trait representation (cached)
+local _traitShortCache = {}
 local function GetArmorTraitShort(traitType)
+    local cached = _traitShortCache[traitType]
+    if cached then return cached end
     local full = GetArmorTraitNameFull(traitType)
     if full == "" then return "" end
     
     local firstWord = full:match("^(%S+)") or full
-    return (zo_strlen(firstWord) > 5) and zo_strsub(firstWord, 1, 4) or firstWord
+    cached = (zo_strlen(firstWord) > 5) and zo_strsub(firstWord, 1, 4) or firstWord
+    _traitShortCache[traitType] = cached
+    return cached
 end
 
 -- Multi-language cleaning for "Perfected" prefix/suffix
@@ -130,7 +180,12 @@ local PERFECTED_PATTERNS = {
     "%s+parfaite$",
 }
 
+local _cleanedSetNameCache = {}
 local function CleanSetName(setName)
+    if not setName or setName == "" then return "" end
+    local cached = _cleanedSetNameCache[setName]
+    if cached then return cached end
+
     local clean = FormatLocalizedString(setName)
     
     -- Strip brackets if present [Perfected] / [Совершенный]
@@ -144,7 +199,9 @@ local function CleanSetName(setName)
     clean = zo_strtrim(clean)
     
     -- Capitalize first character reliably via <<C:1>>
-    return CapitalizeFirstLetter(clean)
+    cached = CapitalizeFirstLetter(clean)
+    _cleanedSetNameCache[setName] = cached
+    return cached
 end
 
 local function GetArmorWeightsAndTraits()
@@ -174,24 +231,25 @@ local function GetArmorWeightsAndTraits()
     return w, list
 end
 
+local _globalSetInfoCache = {}
+
 function KRT.ISI:GetEquippedSets()
     local setsById = {}
-    local setInfoCache = {}
 
     local function addSetFromLink(link)
         if not link or link == "" then return nil end
         local hasSet, _, _, _, _, setId = GetItemLinkSetInfo(link, false)
         if not hasSet or not setId or setId == 0 then return nil end
         
-        if not setInfoCache[setId] then
+        if not _globalSetInfoCache[setId] then
             local _, setName, _, _, max = GetItemLinkSetInfo(link, false)
-            setInfoCache[setId] = { name = CleanSetName(setName), max = max or 0 }
+            _globalSetInfoCache[setId] = { name = CleanSetName(setName), max = max or 0 }
         end
         
         if not setsById[setId] then
-            setsById[setId] = { id=setId, name=setInfoCache[setId].name, max=setInfoCache[setId].max, num=0 }
+            setsById[setId] = { id=setId, name=_globalSetInfoCache[setId].name, max=_globalSetInfoCache[setId].max, num=0 }
         end
-        return setId, setInfoCache[setId].name, setInfoCache[setId].max
+        return setId, _globalSetInfoCache[setId].name, _globalSetInfoCache[setId].max
     end
 
     for _, slot in ipairs(ARMOR_SLOTS) do
@@ -218,13 +276,13 @@ function KRT.ISI:GetEquippedSets()
         local has, _, _, _, _, id = GetItemLinkSetInfo(link, false)
         if not has or not id or id == 0 then return end
         
-        if not setInfoCache[id] then
+        if not _globalSetInfoCache[id] then
             local _, setName, _, _, max = GetItemLinkSetInfo(link, false)
-            setInfoCache[id] = { name = CleanSetName(setName), max = max or 0 }
+            _globalSetInfoCache[id] = { name = CleanSetName(setName), max = max or 0 }
         end
 
         if not weaponCountBySet[id] then
-            weaponCountBySet[id] = { main=0, backup=0, name=setInfoCache[id].name, max=setInfoCache[id].max, id=id }
+            weaponCountBySet[id] = { main=0, backup=0, name=_globalSetInfoCache[id].name, max=_globalSetInfoCache[id].max, id=id }
         end
         weaponCountBySet[id][barKey] = (weaponCountBySet[id][barKey] or 0) + (isTwoHanded(link) and 2 or 1)
     end
@@ -248,7 +306,7 @@ function KRT.ISI:GetEquippedSets()
         e.frontBarNum = e.frontBarNum or e.num
         e.backBarNum = e.backBarNum or e.num
 
-        -- Categorize the set for sorting
+        -- Categorize the set for sorting & coloring
         if (e.max or 0) == 1 then
             e.sortCategory = 2 -- Mythic
         elseif (e.max or 0) == 2 and (e.hasHead or e.hasShoulder) then
@@ -328,10 +386,9 @@ function KRT.ISI:EnsureOverlay()
 
     local bg = WM:CreateControl(nil, win, CT_BACKDROP)
     bg:SetAnchorFill()
-    bg:SetCenterColor(0, 0, 0, 0.5)
-    bg:SetEdgeColor(1, 1, 1, 0.5)
+    bg:SetCenterColor(0, 0, 0, 0.25)
+    bg:SetEdgeColor(0, 0, 0, 0)
     bg:SetEdgeTexture("", 1, 1, 1)
-    bg:SetHidden(true)
     self.bg = bg
 
     local wLight = WM:CreateControl(nil, win, CT_LABEL)
@@ -384,7 +441,6 @@ function KRT.ISI:EnsureOverlay()
         nameLabel:SetAnchor(LEFT, tagLabel, RIGHT, 0, 0)
 
         nameLabel:SetWrapMode(TEXT_WRAP_MODE_ELLIPSIS)
-        nameLabel:SetWidth(180)
 
         self.labels[i] = {
             count = countLabel,
@@ -403,12 +459,25 @@ end
 function KRT.ISI:UpdateSceneFragments()
     if not self.fragment then return end
     local sv = SV()
+    local menuScenes = { "inventory", "bank", "guildBank", "houseBank", "store", "tradinghouse", "craftingResults" }
+
+    if not sv.enabled then
+        if HUD_SCENE:HasFragment(self.fragment) then HUD_SCENE:RemoveFragment(self.fragment) end
+        if HUD_UI_SCENE:HasFragment(self.fragment) then HUD_UI_SCENE:RemoveFragment(self.fragment) end
+        for _, sceneName in ipairs(menuScenes) do
+            local scene = SCENE_MANAGER:GetScene(sceneName)
+            if scene and scene:HasFragment(self.fragment) then
+                scene:RemoveFragment(self.fragment)
+            end
+        end
+        return
+    end
+
     if not HUD_SCENE:HasFragment(self.fragment) then
         HUD_SCENE:AddFragment(self.fragment)
         HUD_UI_SCENE:AddFragment(self.fragment)
     end
     
-    local menuScenes = { "inventory", "bank", "guildBank", "houseBank", "store", "tradinghouse", "craftingResults" }
     for _, sceneName in ipairs(menuScenes) do
         local scene = SCENE_MANAGER:GetScene(sceneName)
         if scene then
@@ -423,6 +492,7 @@ end
 
 function KRT.ISI:UpdateOverlay()
     if not SV().enabled then
+        self:UpdateSceneFragments()
         if self.ui then self.ui:SetHidden(true) end
         return
     end
@@ -436,7 +506,17 @@ function KRT.ISI:UpdateOverlay()
         self.ui:SetHidden(false)
     end
 
-    self.bg:SetHidden(not SV().enableReposition)
+    -- Apply background opacity (0 = transparent, 100 = full black)
+    local opacity = (SV().bgOpacity ~= nil) and SV().bgOpacity or 25
+    local alpha = math.max(0, math.min(1, opacity / 100))
+    self.bg:SetCenterColor(0, 0, 0, alpha)
+
+    -- Show green border when repositioning is active as a visual hitbox
+    if SV().enableReposition then
+        self.bg:SetEdgeColor(0, 1, 0, 0.8)
+    else
+        self.bg:SetEdgeColor(0, 0, 0, 0)
+    end
 
     local y = 0
     local invalidFront, invalidBack = false, false
@@ -478,18 +558,24 @@ function KRT.ISI:UpdateOverlay()
 
     local missingSlots = {}
     if SV().showMissingGearWarning ~= false then
-        local slotNames = {
-            [EQUIP_SLOT_HEAD] = FormatLocalizedString(GetString(SI_EQUIPSLOT0)),
-            [EQUIP_SLOT_CHEST] = FormatLocalizedString(GetString(SI_EQUIPSLOT2)),
-            [EQUIP_SLOT_SHOULDERS] = FormatLocalizedString(GetString(SI_EQUIPSLOT3)),
-            [EQUIP_SLOT_HAND] = FormatLocalizedString(GetString(SI_EQUIPSLOT13)),
-            [EQUIP_SLOT_WAIST] = FormatLocalizedString(GetString(SI_EQUIPSLOT14)),
-            [EQUIP_SLOT_LEGS] = FormatLocalizedString(GetString(SI_EQUIPSLOT8)),
-            [EQUIP_SLOT_FEET] = FormatLocalizedString(GetString(SI_EQUIPSLOT9)),
-            [EQUIP_SLOT_NECK] = FormatLocalizedString(GetString(SI_EQUIPSLOT12)),
-            [EQUIP_SLOT_RING1] = FormatLocalizedString(GetString(SI_EQUIPSLOT11)),
-            [EQUIP_SLOT_RING2] = FormatLocalizedString(GetString(SI_EQUIPSLOT11)),
-        }
+        local lang = GetCVar("language.2")
+        if not self.slotNames or self._slotNamesLang ~= lang then
+            local isRussian = (lang == "ru")
+            self._slotNamesLang = lang
+            self.slotNames = {
+                [EQUIP_SLOT_HEAD] = (SI_EQUIPSLOT0 and FormatLocalizedString(GetString(SI_EQUIPSLOT0))) or (isRussian and "Голова" or "Head"),
+                [EQUIP_SLOT_CHEST] = (SI_EQUIPSLOT2 and FormatLocalizedString(GetString(SI_EQUIPSLOT2))) or (isRussian and "Нагрудник" or "Chest"),
+                [EQUIP_SLOT_SHOULDERS] = (SI_EQUIPSLOT3 and FormatLocalizedString(GetString(SI_EQUIPSLOT3))) or (isRussian and "Плечи" or "Shoulders"),
+                [EQUIP_SLOT_HAND] = isRussian and "Кисти" or "Hands",
+                [EQUIP_SLOT_WAIST] = isRussian and "Пояс" or "Belt",
+                [EQUIP_SLOT_LEGS] = (SI_EQUIPSLOT8 and FormatLocalizedString(GetString(SI_EQUIPSLOT8))) or (isRussian and "Поножи" or "Legs"),
+                [EQUIP_SLOT_FEET] = (SI_EQUIPSLOT9 and FormatLocalizedString(GetString(SI_EQUIPSLOT9))) or (isRussian and "Обувь" or "Feet"),
+                [EQUIP_SLOT_NECK] = (SI_EQUIPSLOT1 and FormatLocalizedString(GetString(SI_EQUIPSLOT1))) or (isRussian and "Шея" or "Neck"),
+                [EQUIP_SLOT_RING1] = (SI_EQUIPSLOT11 and FormatLocalizedString(GetString(SI_EQUIPSLOT11))) or (isRussian and "Кольцо 1" or "Ring 1"),
+                [EQUIP_SLOT_RING2] = (SI_EQUIPSLOT12 and FormatLocalizedString(GetString(SI_EQUIPSLOT12))) or (isRussian and "Кольцо 2" or "Ring 2"),
+            }
+        end
+        local slotNames = self.slotNames
         for _, slot in ipairs(ARMOR_SLOTS) do
             if not HasItemInSlot(BAG_WORN, slot) then table.insert(missingSlots, slotNames[slot] or "Armor") end
         end
@@ -560,6 +646,9 @@ function KRT.ISI:UpdateOverlay()
             for _, t in ipairs(traitsList) do
                 if t.count and t.count > 0 then
                     local label = (distinct <= 2) and GetArmorTraitNameFull(t.traitType) or GetArmorTraitShort(t.traitType)
+                    if SV().colorCodedTraits ~= false then
+                        label = ColorizeTrait(t.traitType, label)
+                    end
                     parts[#parts + 1] = string.format("%dx %s", t.count, label)
                     shown = shown + 1
                     if distinct > 2 and shown >= 4 then break end
@@ -591,15 +680,8 @@ function KRT.ISI:UpdateOverlay()
         if entry then
             countLabel:SetAnchor(TOPLEFT, self.ui, TOPLEFT, 0, y)
 
-            local SPECIAL_GREEN_SET_IDS = {
-                [163] = true, -- Armor of the Trainee
-                [548] = true, -- Druid's Braid
-                [181] = true, -- Willpower
-                [153] = true, -- Blessing of the Potentates
-                [216] = true, -- Eyes of Mara
-            }
-            
-            local isSpecialGreen = SPECIAL_GREEN_SET_IDS[entry.id] or false
+            local minPieces = SPECIAL_SET_MIN_PIECES[entry.id]
+            local isSpecialGreen = minPieces and (entry.num or 0) >= minPieces
 
             local isComplete = (entry.num or 0) >= (entry.max or 0)
             local isMonsterOneOfTwo = not isComplete and (entry.max or 0) == 2 and (entry.num or 0) == 1 and (entry.hasHead or entry.hasShoulder)
@@ -643,17 +725,25 @@ function KRT.ISI:UpdateOverlay()
             tagLabel:SetText(tagStr)
             tagLabel:SetHidden(false)
 
+            -- Determine set name color based on sortCategory (1 = Monster, 2 = Mythic, 3+ = Regular)
+            local nameColor = SV().colorRegular or { 1, 1, 1 }
+            if entry.sortCategory == 1 then
+                nameColor = SV().colorMonster or { 1, 1, 1 }
+            elseif entry.sortCategory == 2 then
+                nameColor = SV().colorMythic or { 1, 1, 1 }
+            end
+
             nameLabel:SetText(entry.name or "")
-            nameLabel:SetColor(unpack(STAT_COLOR))
+            nameLabel:SetColor(unpack(nameColor))
             nameLabel:SetHidden(false)
             
-            countLabel:SetWidth(SV().columnSpacing or 45)
-            
-            if SV().showLocationTags ~= false then
-                tagLabel:SetWidth(SV().tagSpacing or 40)
-            else
-                tagLabel:SetWidth(0)
-            end
+            local colWidth = SV().columnSpacing or 45
+            local tagWidth = (SV().showLocationTags ~= false) and (SV().tagSpacing or 40) or 0
+            local nameWidth = SV().nameSpacing or 180
+
+            countLabel:SetWidth(colWidth)
+            tagLabel:SetWidth(tagWidth)
+            nameLabel:SetWidth(nameWidth)
 
             y = y + ROW_H
         else
@@ -662,16 +752,27 @@ function KRT.ISI:UpdateOverlay()
             nameLabel:SetHidden(true)
         end
     end
-    self.ui:SetHeight(y)
+
+    -- Option A: Calculate backdrop width from column settings + 10px padding
+    local totalWidth = (SV().columnSpacing or 45) + ((SV().showLocationTags ~= false) and (SV().tagSpacing or 40) or 0) + (SV().nameSpacing or 180) + 10
+    self.ui:SetDimensions(totalWidth, y)
+    self.bg:SetDimensions(totalWidth, y)
 end
 
 function KRT.ISI:Initialize()
+    if not SV().hasForcedTraitColoringOnce then
+        SV().colorCodedTraits = true
+        SV().hasForcedTraitColoringOnce = true
+    end
+
     self:UpdateOverlay()
 
     local function OnInventoryUpdate()
+        if not SV().enabled then return end
         KRT.DebounceNextFrame("IsiibusUpdate", function() self:UpdateOverlay() end)
     end
     local function OnCombatStateChanged(eventCode, inCombat)
+        if not SV().enabled then return end
         if SV().hideInCombat and self.ui and not SV().enableReposition then
             self.ui:SetHidden(inCombat)
         end
@@ -681,7 +782,6 @@ function KRT.ISI:Initialize()
     EM:AddFilterForEvent(ADDON_NAME .. "_ISI", EVENT_INVENTORY_SINGLE_SLOT_UPDATE, REGISTER_FILTER_BAG_ID, BAG_WORN)
     EM:RegisterForEvent(ADDON_NAME .. "_ISI2", EVENT_INVENTORY_FULL_UPDATE, OnInventoryUpdate)
     EM:RegisterForEvent(ADDON_NAME .. "_ISI3", EVENT_ACTION_SLOTS_FULL_UPDATE, OnInventoryUpdate)
-    EM:RegisterForEvent(ADDON_NAME .. "_ISI4", EVENT_ACTION_SLOTS_ACTIVE_HOTBAR_UPDATED, OnInventoryUpdate)
     EM:RegisterForEvent(ADDON_NAME .. "_ISICombat", EVENT_PLAYER_COMBAT_STATE, OnCombatStateChanged)
 end
 
@@ -692,14 +792,23 @@ function KRT.ISI:GetLAMSubmenu()
         controls = {
             {
                 type = "checkbox",
-                name = "Enable Isiibus Equipped",
+                name = "Enable Module",
                 tooltip = "Shows equipped sets and armor weights on the screen.",
                 getFunc = function() return SV().enabled end,
-                setFunc = function(value) SV().enabled = value; self:UpdateOverlay() end,
+                setFunc = function(value)
+                    SV().enabled = value
+                    self:UpdateSceneFragments()
+                    if not value then
+                        self:EnableDragging(false)
+                        if self.ui then self.ui:SetHidden(true) end
+                    else
+                        self:UpdateOverlay()
+                    end
+                end,
             },
             {
                 type = "checkbox",
-                name = "Enable repositioning drag",
+                name = "Enable Repositioning (Drag)",
                 tooltip = "Shows a background box allowing you to move the overlay.",
                 getFunc = function() return SV().enableReposition end,
                 setFunc = function(value)
@@ -708,6 +817,32 @@ function KRT.ISI:GetLAMSubmenu()
                     self:UpdateOverlay()
                 end,
                 disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "button",
+                name = "Reset Horizontal Position",
+                func = function()
+                    if not KRT.ISI.ui then return end
+                    local rootW = GuiRoot:GetWidth()
+                    local w = KRT.ISI.ui:GetWidth() * (SV().uiScale or 1.0)
+                    SV().offsetX = (rootW - w) / 2
+                    KRT.ISI:ApplyAnchor()
+                end,
+                width = "half",
+                disabled = function() return not SV().enabled or not SV().enableReposition end,
+            },
+            {
+                type = "button",
+                name = "Reset Vertical Position",
+                func = function()
+                    if not KRT.ISI.ui then return end
+                    local rootH = GuiRoot:GetHeight()
+                    local h = KRT.ISI.ui:GetHeight() * (SV().uiScale or 1.0)
+                    SV().offsetY = (rootH - h) / 2
+                    KRT.ISI:ApplyAnchor()
+                end,
+                width = "half",
+                disabled = function() return not SV().enabled or not SV().enableReposition end,
             },
             {
                 type = "slider",
@@ -721,6 +856,69 @@ function KRT.ISI:GetLAMSubmenu()
                     SV().uiScale = value / 100.0
                     self:ApplyAnchor()
                 end,
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "slider",
+                name = "Background Opacity (%)",
+                tooltip = "Adjusts background opacity from 0 (fully transparent) to 100 (solid black).",
+                min = 0,
+                max = 100,
+                step = 1,
+                getFunc = function() return (SV().bgOpacity ~= nil) and SV().bgOpacity or 25 end,
+                setFunc = function(value) 
+                    SV().bgOpacity = value 
+                    self:UpdateOverlay() 
+                end,
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "slider",
+                name = "Count Column Width",
+                tooltip = "Adjusts the gap between the piece counts and the tags.",
+                min = 20,
+                max = 100,
+                step = 1,
+                getFunc = function() return SV().columnSpacing or 45 end,
+                setFunc = function(value) SV().columnSpacing = value; self:UpdateOverlay() end,
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "slider",
+                name = "Tag Column Width",
+                tooltip = "Adjusts the width of the location tags column.",
+                min = 10,
+                max = 50,
+                step = 1,
+                getFunc = function() return SV().tagSpacing or 40 end,
+                setFunc = function(value) SV().tagSpacing = value; self:UpdateOverlay() end,
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "slider",
+                name = "Set Name Column Width",
+                tooltip = "Adjusts the max width allowed for set names before truncation.",
+                min = 100,
+                max = 200,
+                step = 1,
+                getFunc = function() return SV().nameSpacing or 180 end,
+                setFunc = function(value) SV().nameSpacing = value; self:UpdateOverlay() end,
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "checkbox",
+                name = "Show in Inventory/Bank",
+                tooltip = "Displays the overlay while interacting with your inventory, bank, or storage chests.",
+                getFunc = function() return SV().showInMenus end,
+                setFunc = function(value) SV().showInMenus = value; self:UpdateSceneFragments() end,
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "checkbox",
+                name = "Hide in Combat",
+                tooltip = "Automatically hides the overlay when you enter combat.",
+                getFunc = function() return SV().hideInCombat end,
+                setFunc = function(value) SV().hideInCombat = value; self:UpdateOverlay() end,
                 disabled = function() return not SV().enabled end,
             },
             {
@@ -771,68 +969,56 @@ function KRT.ISI:GetLAMSubmenu()
                 disabled = function() return not SV().enabled end,
             },
             {
-                type = "slider",
-                name = "Count Column Width",
-                tooltip = "Adjusts the gap between the piece counts and the tags.",
-                min = 20,
-                max = 100,
-                step = 1,
-                getFunc = function() return SV().columnSpacing or 45 end,
-                setFunc = function(value) SV().columnSpacing = value; self:UpdateOverlay() end,
-                disabled = function() return not SV().enabled end,
-            },
-            {
-                type = "slider",
-                name = "Set Name Column Width",
-                tooltip = "Adjusts the width of the tags column, changing where the set name starts.",
-                min = 10,
-                max = 50,
-                step = 1,
-                getFunc = function() return SV().tagSpacing or 40 end,
-                setFunc = function(value) SV().tagSpacing = value; self:UpdateOverlay() end,
-                disabled = function() return not SV().enabled end,
-            },
-            {
-                type = "checkbox",
-                name = "Show in Inventory/Bank",
-                tooltip = "Displays the overlay while interacting with your inventory, bank, or storage chests.",
-                getFunc = function() return SV().showInMenus end,
-                setFunc = function(value) SV().showInMenus = value; self:UpdateSceneFragments() end,
-                disabled = function() return not SV().enabled end,
-            },
-            {
-                type = "checkbox",
-                name = "Hide in Combat",
-                tooltip = "Automatically hides the overlay when you enter combat.",
-                getFunc = function() return SV().hideInCombat end,
-                setFunc = function(value) SV().hideInCombat = value; self:UpdateOverlay() end,
-                disabled = function() return not SV().enabled end,
-            },
-            {
-                type = "button",
-                name = "Reset horizontal position",
-                func = function()
-                    if not KRT.ISI.ui then return end
-                    local rootW = GuiRoot:GetWidth()
-                    local w = KRT.ISI.ui:GetWidth() * (SV().uiScale or 1.0)
-                    SV().offsetX = (rootW - w) / 2
-                    KRT.ISI:ApplyAnchor()
-                end,
-                width = "half",
-                disabled = function() return not SV().enabled or not SV().enableReposition end,
-            },
-            {
-                type = "button",
-                name = "Reset vertical position",
-                func = function()
-                    if not KRT.ISI.ui then return end
-                    local rootH = GuiRoot:GetHeight()
-                    local h = KRT.ISI.ui:GetHeight() * (SV().uiScale or 1.0)
-                    SV().offsetY = (rootH - h) / 2
-                    KRT.ISI:ApplyAnchor()
-                end,
-                width = "half",
-                disabled = function() return not SV().enabled or not SV().enableReposition end,
+                type = "submenu",
+                name = "Color Options",
+                controls = {
+                    {
+                        type = "checkbox",
+                        name = "Color-Coded Armor Traits",
+                        tooltip = "Applies distinct thematic colors to equipped armor trait labels.",
+                        getFunc = function() 
+                            if SV().colorCodedTraits == nil then return true else return SV().colorCodedTraits end 
+                        end,
+                        setFunc = function(value) 
+                            SV().colorCodedTraits = value 
+                            self:UpdateOverlay() 
+                        end,
+                        disabled = function() return not SV().enabled or not SV().showArmorTraits end,
+                    },
+                    {
+                        type = "colorpicker",
+                        name = "Monster Set Color",
+                        tooltip = "Color for Monster set names (Head / Shoulders).",
+                        getFunc = function() return unpack(SV().colorMonster or { 1, 1, 1 }) end,
+                        setFunc = function(r, g, b) 
+                            SV().colorMonster = { r, g, b } 
+                            self:UpdateOverlay() 
+                        end,
+                        disabled = function() return not SV().enabled end,
+                    },
+                    {
+                        type = "colorpicker",
+                        name = "Mythic Item Color",
+                        tooltip = "Color for Mythic item names.",
+                        getFunc = function() return unpack(SV().colorMythic or { 1, 1, 1 }) end,
+                        setFunc = function(r, g, b) 
+                            SV().colorMythic = { r, g, b } 
+                            self:UpdateOverlay() 
+                        end,
+                        disabled = function() return not SV().enabled end,
+                    },
+                    {
+                        type = "colorpicker",
+                        name = "Regular Set Color",
+                        tooltip = "Color for standard 3-piece and 5-piece set names.",
+                        getFunc = function() return unpack(SV().colorRegular or { 1, 1, 1 }) end,
+                        setFunc = function(r, g, b) 
+                            SV().colorRegular = { r, g, b } 
+                            self:UpdateOverlay() 
+                        end,
+                        disabled = function() return not SV().enabled end,
+                    },
+                },
             },
         }
     }

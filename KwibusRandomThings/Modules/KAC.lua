@@ -1,3 +1,4 @@
+KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
 local WM = WINDOW_MANAGER
@@ -19,7 +20,7 @@ KRT.KAC = {
   autoConfirmHooked = false,
 }
 
-function KRT.KAC:SV() return KRT.sv and KRT.sv.kac end
+function KRT.KAC:SV() return KRT.GetModuleSV(self.id, self.defaults) end
 
 function KRT.KAC:Initialize()
   local sv = self:SV()
@@ -29,9 +30,11 @@ function KRT.KAC:Initialize()
   self.autoConfirmHooked = true
 
   local function hook()
+    local sv2 = self:SV()
+    if not (sv2 and sv2.enabled) then return end
+
     zo_callLater(function()
-      local sv2 = self:SV()
-      if not (sv2 and sv2.enabled) then return end
+      if not (self:SV() and self:SV().enabled) then return end
 
       if ZO_Dialog1 and ZO_Dialog1.textParams and ZO_Dialog1.textParams.mainTextParams then
         for _, v in pairs(ZO_Dialog1.textParams.mainTextParams) do
@@ -55,17 +58,19 @@ end
 
 -- =========================================================
 
-local function SV() return KRT.sv end
+local function SV() return KRT.KAC:SV() end
 
 function KRT.KAC:GetLAMSubmenu()
     return {
       type = "submenu",
       name = "Kwibus Confirm",
       controls = {
-        { type = "checkbox", name = "Enable Auto-Confirm",
+        {
+          type = "checkbox",
+          name = "Enable Module",
           tooltip = "Automatically fills in 'CONFIRM' or similar text when destructive dialogs appear.",
-          getFunc = function() return SV().kac.enabled end,
-          setFunc = function(v) SV().kac.enabled = v end,
+          getFunc = function() return SV().enabled end,
+          setFunc = function(v) SV().enabled = v end,
           width = "full",
         },
       },

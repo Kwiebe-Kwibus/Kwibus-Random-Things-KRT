@@ -1,3 +1,4 @@
+KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 
 local DEFAULTS = { guid = {
@@ -9,23 +10,16 @@ KRT.GUID = {
     id = "guid",
     defaults = DEFAULTS.guid,
 }
-local self = KRT.GUID
-
--- SAFE SV fetcher
-local function SV() 
-    if KRT.sv and type(KRT.sv.guid) == "table" then 
-        if KRT.sv.guid.stripAtSymbol == nil then
-            KRT.sv.guid.stripAtSymbol = DEFAULTS.guid.stripAtSymbol
-        end
-        return KRT.sv.guid 
-    end
-    return DEFAULTS.guid 
+local function SV()
+    return KRT.GetModuleSV("guid", DEFAULTS.guid)
 end
 
 -- Helper to remove the "@" at the start of a string
 local function StripAt(name)
     if type(name) == "string" and SV().stripAtSymbol then
-        return name:gsub("^@", "")
+        if name:byte(1) == 64 then
+            return name:sub(2)
+        end
     end
     return name
 end
@@ -36,7 +30,7 @@ local function groupEntryPostHook(selfControl, control, data)
     if not ZO_ShouldPreferUserId() then return false end
     
     control.characterNameLabel:SetText(zo_strformat(SI_GROUP_LIST_PANEL_CHARACTER_NAME, data.index, StripAt(data.displayName)))
-    return true
+    return false
 end
 
 local function leaderboardEntryPostHook(selfControl, control, data)
@@ -107,15 +101,27 @@ local function guildRosterEntryPostHook(selfControl, control, data)
 end
 
 function KRT.GUID:Initialize()
-    ZO_PostHook(GROUP_LIST, "SetupGroupEntry", groupEntryPostHook)
-    ZO_PostHook(ZO_LeaderboardsManager_Shared, "SetupLeaderboardPlayerEntry", leaderboardEntryPostHook)
-    ZO_PostHook(CampaignEmperor_Shared, "SetupLeaderboardEntry", leaderboardEntryPostHook)
-    ZO_PostHook(CampaignEmperor_Shared, "RefreshEmperor", refreshEmperorPostHook)
-    ZO_PostHook(ZO_SocialListKeyboard, "CharacterName_OnMouseEnter", socialListOnMouseEnterPostHook)
+    if GROUP_LIST then
+        ZO_PostHook(GROUP_LIST, "SetupGroupEntry", groupEntryPostHook)
+    end
+    if ZO_LeaderboardsManager_Shared then
+        ZO_PostHook(ZO_LeaderboardsManager_Shared, "SetupLeaderboardPlayerEntry", leaderboardEntryPostHook)
+    end
+    if CampaignEmperor_Shared then
+        ZO_PostHook(CampaignEmperor_Shared, "SetupLeaderboardEntry", leaderboardEntryPostHook)
+        ZO_PostHook(CampaignEmperor_Shared, "RefreshEmperor", refreshEmperorPostHook)
+    end
+    if ZO_SocialListKeyboard then
+        ZO_PostHook(ZO_SocialListKeyboard, "CharacterName_OnMouseEnter", socialListOnMouseEnterPostHook)
+    end
     
     -- Added Hooks for Friends and Guild lists
-    ZO_PostHook(ZO_KeyboardFriendsList, "SetupFriendRow", friendsListEntryPostHook)
-    ZO_PostHook(ZO_GuildRosterManager, "SetupGuildRosterRow", guildRosterEntryPostHook)
+    if ZO_KeyboardFriendsList then
+        ZO_PostHook(ZO_KeyboardFriendsList, "SetupFriendRow", friendsListEntryPostHook)
+    end
+    if ZO_GuildRosterManager then
+        ZO_PostHook(ZO_GuildRosterManager, "SetupGuildRosterRow", guildRosterEntryPostHook)
+    end
 end
 
 function KRT.GUID:GetLAMSubmenu()
