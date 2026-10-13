@@ -1,3 +1,4 @@
+KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
 local WM = WINDOW_MANAGER
@@ -13,7 +14,7 @@ local DEFAULTS = { km = {
     enabled = true,
     blockFlare = true,
     timeout = 20,
-    text = "ARCHSTUPID",
+    text = "ARCHDRUID READY",
     showStaticLabel = true,
     labelScale = 1.8,
     debugEnabled = false,
@@ -30,6 +31,7 @@ KRT.KM = {
     DEFAULT_FLARE_ID = 61489,
     MIN_PIECES = 2,
     SLOTS = { EQUIP_SLOT_HEAD, EQUIP_SLOT_SHOULDERS },
+    HARD_COOLDOWN = 15,
 
     lastArchdruidTime = 0,
     _lastArchdruidCount = nil,
@@ -44,7 +46,7 @@ KRT.KM = {
 }
 
 function KRT.KM:SV()
-    return KRT.sv and KRT.sv.km
+    return KRT.GetModuleSV(self.id, self.defaults)
 end
 
 function KRT.KM:Debug(msg, ...)
@@ -101,10 +103,20 @@ function KRT.KM:HasTwoPieces()
     return self:GetArchdruidPieceCountCached(5000) >= self.MIN_PIECES
 end
 
+function KRT.KM:GetCooldownRemaining()
+    local elapsed = GetGameTimeSeconds() - (self.lastArchdruidTime or 0)
+    local remaining = (self.HARD_COOLDOWN or 15) - elapsed
+    return (remaining > 0) and remaining or 0
+end
+
+function KRT.KM:IsOnCooldown()
+    return self:GetCooldownRemaining() > 0
+end
+
 function KRT.KM:CreateWarningWindow()
     if self.warningWindow then return end
 
-    local win = WM:CreateTopLevelWindow("KromitorMomentWarningWindow")
+    local win = WM:CreateTopLevelWindow("KwibusKromitorMomentWarningWindow")
     win:SetDimensions(120, 40)
     win:SetHidden(true)
     win:SetMouseEnabled(false)
@@ -114,7 +126,7 @@ function KRT.KM:CreateWarningWindow()
     win:SetDrawTier(DT_HIGH)
     win:SetDrawLevel(9999)
 
-    local label = WM:CreateControl("KromitorMomentWarningLabel", win, CT_LABEL)
+    local label = WM:CreateControl("$(parent)Label", win, CT_LABEL)
     label:SetAnchor(CENTER, win, CENTER, 0, 0)
     label:SetFont("ZoFontAnnounceLarge")
     label:SetHorizontalAlignment(TEXT_ALIGN_CENTER)
@@ -139,80 +151,56 @@ function KRT.KM:UpdateWarningText()
     label:SetText(text)
     label:SetScale(scale)
 
-    DebounceNextFrame("KM_Resize", function()
-        local tries = 0
-        local function ResizeHitbox()
-            tries = tries + 1
-            local w = (label:GetTextWidth() or 0) * scale + 24
-            local h = (label:GetTextHeight() or 0) * scale + 24
-            if (w <= 26 or h <= 26) and tries < 6 then
-                zo_callLater(ResizeHitbox, 0)
-                return
-            end
-            if w < 60 then w = 60 end
-            if h < 30 then h = 30 end
-            label:SetDimensions(w / scale, h / scale)
-            win:SetDimensions(w, h)
-        end
-        ResizeHitbox()
-    end)
+    KRT.ResizeTextHitbox("KM_Resize", win, label, scale, 60, 30)
 end
 
 function KRT.KM:ApplyAnchor()
-    local sv = self:SV()
-    if not (self.warningWindow and sv) then return end
-    self.warningWindow:ClearAnchors()
-    self.warningWindow:SetAnchor(CENTER, GuiRoot, CENTER, sv.offsetX or 0, sv.offsetY or DEFAULTS.km.offsetY)
+    KRT.ApplyCenterAnchor(self.warningWindow, self:SV(), DEFAULTS.km.offsetY)
 end
 
 function KRT.KM:EnableDragging(enable)
     local sv = self:SV()
-    local ui, label = self.warningWindow, self.warningLabel
-    if not (ui and label and sv) then return end
-
-    ui:SetMouseEnabled(false)
-    ui:SetMovable(true)
-    ui:SetClampedToScreen(true)
-    ui:SetDrawTier(DT_HIGH)
-    ui:SetDrawLayer(DL_OVERLAY)
-
-    if enable then
-        ui:SetHidden(false)
-        label:SetMouseEnabled(true)
-
-        label:SetHandler("OnMouseDown", function(_, button)
-            if button == MOUSE_BUTTON_INDEX_LEFT then
-                ui:StartMoving()
-            end
-        end)
-
-        label:SetHandler("OnMouseUp", function(_, button)
-            if button == MOUSE_BUTTON_INDEX_LEFT then
-                ui:StopMovingOrResizing()
-            end
-        end)
-
-        ui:SetHandler("OnMoveStop", function(control)
-            local rootCx, rootCy = GuiRoot:GetCenter()
-            local ux, uy = control:GetCenter()
-            sv.offsetX = zo_round(ux - rootCx)
-            sv.offsetY = zo_round(uy - rootCy)
-            self:ApplyAnchor()
-        end)
-    else
-        label:SetMouseEnabled(false)
-        label:SetHandler("OnMouseDown", nil)
-        label:SetHandler("OnMouseUp", nil)
-        ui:SetHandler("OnMoveStop", nil)
+    KRT.EnableDragging(self.warningWindow, self.warningLabel, sv, enable, function() self:ApplyAnchor() end, function()
+        self:UpdateLoopState()
         self:OnUpdate()
-    end
+    end)
 end
 
-function KRT.KM:OnCombatEvent()
+function KRT.KM:OnCombatEvent(eventCode, result, isError, abilityName, abilityGraphic, abilityActionSlotType, sourceName, sourceType, targetName, targetType, hitValue, powerType, damageType, log, sourceUnitId, targetUnitId, abilityId)
+    if sourceType and sourceType ~= COMBAT_UNIT_TYPE_PLAYER then return end
+
+    if self:IsOnCooldown() then
+        self:Debug("Archdruid proc ignored: hard cooldown active (%.1fs remaining)", self:GetCooldownRemaining())
+        return
+    end
+
     self.lastArchdruidTime = GetGameTimeSeconds()
+    self:Debug("Archdruid proc detected. 15s hard cooldown started.")
+
     local sv = self:SV()
     if self.warningWindow and sv and not sv.enableReposition then
         self.warningWindow:SetHidden(true)
+    end
+end
+
+function KRT.KM:UpdateLoopState()
+    local sv = self:SV()
+    local shouldRun = sv and sv.enabled and (sv.enableReposition or IsUnitInCombat("player"))
+    if shouldRun then
+        if not self._updateRegistered then
+            EM:RegisterForUpdate(ADDON_NAME .. "_KM_Update", 250, function()
+                self:OnUpdate()
+            end)
+            self._updateRegistered = true
+        end
+    else
+        if self._updateRegistered then
+            EM:UnregisterForUpdate(ADDON_NAME .. "_KM_Update")
+            self._updateRegistered = false
+        end
+        if self.warningWindow and sv and not sv.enableReposition then
+            self.warningWindow:SetHidden(true)
+        end
     end
 end
 
@@ -222,14 +210,13 @@ function KRT.KM:ToggleBackgroundLoops(enable)
             self:OnCombatEvent(...)
         end)
         EM:AddFilterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT, REGISTER_FILTER_ABILITY_ID, self.ARCHDRUID_ABILITY_ID)
-        EM:RegisterForUpdate(ADDON_NAME .. "_KM_Update", 250, function()
-            self:OnUpdate()
-        end)
+        EM:AddFilterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT, REGISTER_FILTER_SOURCE_COMBAT_UNIT_TYPE, COMBAT_UNIT_TYPE_PLAYER)
         self._loopsRegistered = true
+        self:UpdateLoopState()
     elseif not enable and self._loopsRegistered then
         EM:UnregisterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT)
-        EM:UnregisterForUpdate(ADDON_NAME .. "_KM_Update")
         self._loopsRegistered = false
+        self:UpdateLoopState()
     end
 end
 
@@ -248,6 +235,11 @@ function KRT.KM:OnUpdate()
     end
 
     if not self:HasTwoPieces() then
+        self.warningWindow:SetHidden(true)
+        return
+    end
+
+    if self:IsOnCooldown() then
         self.warningWindow:SetHidden(true)
         return
     end
@@ -359,13 +351,23 @@ function KRT.KM:Initialize()
         sv.blockFlare = false
     end
 
-    self.lastArchdruidTime = GetGameTimeSeconds() - (sv.timeout or DEFAULTS.km.timeout)
+    local timeout = math.max(self.HARD_COOLDOWN, sv.timeout or DEFAULTS.km.timeout)
+    self.lastArchdruidTime = GetGameTimeSeconds() - timeout
 
     self:CreateWarningWindow()
     self:ApplyAnchor()
     self:EnableDragging(sv.enableReposition)
     self:SetupSkillBlocking()
     self:RegisterSlashCommands()
+
+    EM:RegisterForEvent(ADDON_NAME .. "_KM_CombatState", EVENT_PLAYER_COMBAT_STATE, function(_, inCombat)
+        local sv2 = self:SV()
+        if not (sv2 and sv2.enabled) then return end
+        self:UpdateLoopState()
+        if inCombat then
+            self:OnUpdate()
+        end
+    end)
 
     if sv.enabled then
         self:ToggleBackgroundLoops(true)
@@ -383,26 +385,30 @@ function KRT.KM:GetLAMSubmenu()
         controls = {
             {
                 type = "checkbox",
-                name = "Enable KromitorMoment",
+                name = "Enable Module",
                 getFunc = function()
                     return SV().km.enabled
                 end,
                 setFunc = function(v)
                     SV().km.enabled = v
                     if not v then
+                        KRT.KM:EnableDragging(false)
                         if KRT.KM.warningWindow then
                             KRT.KM.warningWindow:SetHidden(true)
                         end
                         KRT.KM:ToggleBackgroundLoops(false)
+                        KRT.KM:UpdateLoopState()
                     else
                         KRT.KM:ToggleBackgroundLoops(true)
+                        KRT.KM:UpdateLoopState()
                     end
                 end,
                 width = "full",
             },
             {
                 type = "checkbox",
-                name = "Enable repositioning (drag)",
+                name = "Enable Repositioning (Drag)",
+                tooltip = "Allows you to drag and reposition the warning overlay.",
                 getFunc = function()
                     return SV().km.enableReposition
                 end,
@@ -417,8 +423,99 @@ function KRT.KM:GetLAMSubmenu()
                 end,
             },
             {
+                type = "button",
+                name = "Reset Horizontal Position",
+                func = function()
+                    SV().km.offsetX = 0
+                    KRT.KM:ApplyAnchor()
+                end,
+                disabled = function()
+                    return not SV().km.enabled or not SV().km.enableReposition
+                end,
+                width = "half",
+            },
+            {
+                type = "button",
+                name = "Reset Vertical Position",
+                func = function()
+                    SV().km.offsetY = DEFAULTS.km.offsetY
+                    KRT.KM:ApplyAnchor()
+                end,
+                disabled = function()
+                    return not SV().km.enabled or not SV().km.enableReposition
+                end,
+                width = "half",
+            },
+            {
+                type = "editbox",
+                name = "Warning Text",
+                isMultiline = false,
+                getFunc = function()
+                    return SV().km.text
+                end,
+                setFunc = function(v)
+                    SV().km.text = IsNonEmptyString(v) and v or DEFAULTS.km.text
+                    KRT.KM:UpdateWarningText()
+                end,
+                width = "full",
+                disabled = function()
+                    return not SV().km.enabled
+                end,
+            },
+            {
+                type = "slider",
+                name = "Text Scale",
+                min = 0.5,
+                max = 3.0,
+                step = 0.1,
+                getFunc = function()
+                    return SV().km.labelScale
+                end,
+                setFunc = function(v)
+                    SV().km.labelScale = v
+                    KRT.KM:UpdateWarningText()
+                end,
+                width = "full",
+                disabled = function()
+                    return not SV().km.enabled
+                end,
+            },
+            {
                 type = "checkbox",
-                name = "Block configured skills (LibSkillBlocker)",
+                name = "Show Static Label When Missing Proc",
+                getFunc = function()
+                    return SV().km.showStaticLabel
+                end,
+                setFunc = function(v)
+                    SV().km.showStaticLabel = v
+                end,
+                width = "full",
+                disabled = function()
+                    return not SV().km.enabled
+                end,
+            },
+            {
+                type = "slider",
+                name = "Archdruid Timeout (Seconds)",
+                tooltip = "Seconds after a proc before warning you. Archdruid has a hard 15-second cooldown.",
+                min = 15,
+                max = 60,
+                step = 1,
+                getFunc = function()
+                    local val = SV().km.timeout or DEFAULTS.km.timeout
+                    return math.max(KRT.KM.HARD_COOLDOWN, val)
+                end,
+                setFunc = function(v)
+                    SV().km.timeout = math.max(KRT.KM.HARD_COOLDOWN, v)
+                end,
+                width = "full",
+                disabled = function()
+                    return not SV().km.enabled
+                end,
+            },
+            {
+                type = "checkbox",
+                name = "Block Configured Skills (LibSkillBlocker)",
                 getFunc = function()
                     if not KRT.KM:HasLibSkillBlocker() and SV().km.blockFlare then
                         SV().km.blockFlare = false
@@ -445,7 +542,7 @@ function KRT.KM:GetLAMSubmenu()
             },
             {
                 type = "description",
-                title = "Blocked ability IDs",
+                title = "Blocked Ability IDs",
                 text = function()
                     return KRT.KM:GetBlockedAbilityListText()
                 end,
@@ -453,7 +550,7 @@ function KRT.KM:GetLAMSubmenu()
             },
             {
                 type = "editbox",
-                name = "Add ability ID to block",
+                name = "Add Ability ID to Block",
                 isMultiline = false,
                 getFunc = function()
                     return ""
@@ -469,7 +566,7 @@ function KRT.KM:GetLAMSubmenu()
             },
             {
                 type = "editbox",
-                name = "Remove ability ID from block list",
+                name = "Remove Ability ID from Block List",
                 isMultiline = false,
                 getFunc = function()
                     return ""
@@ -483,97 +580,8 @@ function KRT.KM:GetLAMSubmenu()
                 end,
             },
             {
-                type = "slider",
-                name = "Archdruid timeout (seconds)",
-                min = 5,
-                max = 60,
-                step = 1,
-                getFunc = function()
-                    return SV().km.timeout
-                end,
-                setFunc = function(v)
-                    SV().km.timeout = v
-                end,
-                width = "full",
-                disabled = function()
-                    return not SV().km.enabled
-                end,
-            },
-            {
-                type = "editbox",
-                name = "Warning text",
-                isMultiline = false,
-                getFunc = function()
-                    return SV().km.text
-                end,
-                setFunc = function(v)
-                    SV().km.text = IsNonEmptyString(v) and v or DEFAULTS.km.text
-                    KRT.KM:UpdateWarningText()
-                end,
-                width = "full",
-                disabled = function()
-                    return not SV().km.enabled
-                end,
-            },
-            {
-                type = "slider",
-                name = "Label scale",
-                min = 0.5,
-                max = 3.0,
-                step = 0.1,
-                getFunc = function()
-                    return SV().km.labelScale
-                end,
-                setFunc = function(v)
-                    SV().km.labelScale = v
-                    KRT.KM:UpdateWarningText()
-                end,
-                width = "full",
-                disabled = function()
-                    return not SV().km.enabled
-                end,
-            },
-            {
                 type = "checkbox",
-                name = "Show static label when missing proc",
-                getFunc = function()
-                    return SV().km.showStaticLabel
-                end,
-                setFunc = function(v)
-                    SV().km.showStaticLabel = v
-                end,
-                width = "full",
-                disabled = function()
-                    return not SV().km.enabled
-                end,
-            },
-            {
-                type = "button",
-                name = "Reset horizontal position",
-                func = function()
-                    SV().km.offsetX = 0
-                    KRT.KM:ApplyAnchor()
-                end,
-                disabled = function()
-                    return not SV().km.enabled or not SV().km.enableReposition
-                end,
-                width = "half",
-            },
-            {
-                type = "button",
-                name = "Reset vertical position",
-                func = function()
-                    SV().km.offsetY = DEFAULTS.km.offsetY
-                    KRT.KM:ApplyAnchor()
-                end,
-                disabled = function()
-                    return not SV().km.enabled or not SV().km.enableReposition
-                end,
-                width = "half",
-            },
-            {
-                type = "checkbox",
-                name = "KM debug logging",
+                name = "Enable Debug Logging",
                 getFunc = function()
                     return SV().km.debugEnabled
                 end,
