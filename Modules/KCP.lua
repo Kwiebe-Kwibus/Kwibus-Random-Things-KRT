@@ -30,7 +30,6 @@ KRT.KCP = {
     lbl = nil,
 
     _slotted = false,
-    _slottedAtMs = 0,
     _hasDebuff = false,
     _hasDebuffAtMs = 0,
 }
@@ -95,23 +94,22 @@ function KRT.KCP:EnableDragging(enable)
     KRT.EnableDragging(self.ui, self.lbl, sv, enable, function() self:ApplyAnchor() end, function() self:OnCombatUpdate() end)
 end
 
--- Scans skill bars to verify if Colorless Pool is currently slotted
-function KRT.KCP:_ComputeIsSkillSlotted()
+-- Scans skill bars ONLY when ESO notifies us that abilities were modified,
+-- caching the result so in-combat evaluations are instant O(1) lookups.
+function KRT.KCP:UpdateSlottedState()
     for _, bar in ipairs(BARS_TO_CHECK) do
         for slot = 3, 8 do
-            if GetSlotBoundId(slot, bar) == self.SKILL_ID then return true end
+            if GetSlotBoundId(slot, bar) == self.SKILL_ID then
+                self._slotted = true
+                return true
+            end
         end
     end
+    self._slotted = false
     return false
 end
 
--- Caches the slotted status for 1 second so we aren't querying skill slots every millisecond
-function KRT.KCP:IsSkillSlottedCached(maxAgeMs)
-    local nowMs = GetFrameTimeMilliseconds()
-    if (nowMs - (self._slottedAtMs or 0)) > (maxAgeMs or 1000) then
-        self._slotted = self:_ComputeIsSkillSlotted()
-        self._slottedAtMs = nowMs
-    end
+function KRT.KCP:IsSkillSlotted()
     return self._slotted
 end
 
@@ -155,12 +153,12 @@ function KRT.KCP:OnCombatUpdate()
     -- Only yell if:
     -- 1. We are in combat
     -- 2. Looking at a valid living enemy
-    -- 3. We actually have Colorless Pool on our bar
+    -- 3. We actually have Colorless Pool on our bar (instant O(1) boolean check)
     if IsUnitInCombat("player")
         and DoesUnitExist("reticleover")
         and IsUnitAttackable("reticleover")
         and not IsUnitDead("reticleover") then
-        if self:IsSkillSlottedCached(1000) then
+        if self:IsSkillSlotted() then
             -- Hide the warning IF debuff is present; show IF debuff is missing
             self.ui:SetHidden(self:HasDebuffCached(120))
             return
@@ -182,10 +180,33 @@ function KRT.KCP:Initialize()
     self:UpdateTextAndScale()
     self:EnableDragging(sv.enableReposition)
 
+    -- Initial skill scan on startup
+    self:UpdateSlottedState()
+
+    -- Re-evaluate skills only when abilities actually change on your hotbars
+    local function OnSkillsChanged()
+        local sv2 = self:SV()
+        if not (sv2 and sv2.enabled) then return end
+        self:UpdateSlottedState()
+        self:OnCombatUpdate()
+    end
+
+    EM:RegisterForEvent(ADDON_NAME .. "_KCP_HotbarsUpdated", EVENT_ACTION_SLOTS_ALL_HOTBARS_UPDATED, OnSkillsChanged)
+    EM:RegisterForEvent(ADDON_NAME .. "_KCP_SlotUpdated", EVENT_ACTION_SLOT_UPDATED, OnSkillsChanged)
+
     -- Refresh state when entering/leaving combat
     EM:RegisterForEvent(ADDON_NAME .. "_KCP_Combat", EVENT_PLAYER_COMBAT_STATE, function()
         local sv2 = self:SV()
         if not (sv2 and sv2.enabled) then return end
+        self:OnCombatUpdate()
+    end)
+
+    -- Re-scan upon zone loads
+    EM:RegisterForEvent(ADDON_NAME .. "_KCP_Activated", EVENT_PLAYER_ACTIVATED, function()
+        local sv2 = self:SV()
+        if not (sv2 and sv2.enabled) then return end
+        self:UpdateSlottedState()
+        self:ApplyAnchor()
         self:OnCombatUpdate()
     end)
 
@@ -195,7 +216,6 @@ function KRT.KCP:Initialize()
         if not (sv2 and sv2.enabled) then return end
         if not (IsUnitInCombat("player") or sv2.enableReposition) then return end
         self._hasDebuffAtMs = 0
-        self._slottedAtMs = 0
         self:OnCombatUpdate()
     end)
 
@@ -230,6 +250,7 @@ function KRT.KCP:GetLAMSubmenu()
                         KRT.KCP:EnableDragging(false)
                         if KRT.KCP.ui then KRT.KCP.ui:SetHidden(true) end
                     else
+                        KRT.KCP:UpdateSlottedState()
                         KRT.KCP:OnCombatUpdate()
                     end
                 end,
