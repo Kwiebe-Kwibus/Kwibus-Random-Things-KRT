@@ -1,3 +1,6 @@
+﻿-- Kwibus Auto Log (EAL)
+-- Automatically turns /encounterlog on and off based on where you are.
+-- Never forget to log a world-record trial run, and never fill up your SSD with 50 gigabytes of overland mudcrab logs.
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
@@ -36,6 +39,7 @@ local function SV()
     return KRT.GetModuleSV("eal", DEFAULTS.eal)
 end
 
+-- Chat helper for logging state messages
 local function PrintChatNotification(message)
     if CHAT_ROUTER then
         CHAT_ROUTER:AddSystemMessage("[Kwibus Auto Log] " .. message)
@@ -44,13 +48,14 @@ local function PrintChatNotification(message)
     end
 end
 
+-- Figures out what kind of playground you just loaded into
 local function GetLocationType()
-    -- 1. Check Housing
+    -- 1. Check Housing (for the dummy humpers)
     if GetCurrentHouseOwner() ~= "" or GetCurrentZoneHouseId() ~= 0 then 
         return "HOUSE", false 
     end
     
-    -- 2. Check PvP
+    -- 2. Check PvP (Cyrodiil, Imperial City, Battlegrounds)
     if IsActiveWorldBattleground() or IsInImperialCity() or IsInCyrodiil() or IsPlayerInAvAWorld() then 
         return "PVP", false 
     end
@@ -60,9 +65,9 @@ local function GetLocationType()
     if difficulty ~= DUNGEON_DIFFICULTY_NONE then
         local isVet = (difficulty == DUNGEON_DIFFICULTY_VETERAN)
         local zoneId = GetZoneId(GetUnitZoneIndex("player"))
-        local instanceType = "DUNGEON" -- Assume dungeon first
+        local instanceType = "DUNGEON" -- Default assumption
 
-        -- Determine if it's actually an Arena or Trial dynamically
+        -- Determine if it's an Arena or Trial dynamically from raid structures
         if IsPlayerInReviveCounterRaid() then
             local reviveCounter = GetCurrentRaidStartingReviveCounters()
             local raidId = GetCurrentParticipatingRaidId()
@@ -73,7 +78,7 @@ local function GetLocationType()
                 instanceType = "ARENA"
             end
         else
-            -- Failsafe: if the dynamic check fails, use our hardcoded arrays
+            -- Failsafe: if the dynamic API call is sleeping, check our hardcoded zone lists
             if TRIAL_ZONES[zoneId] then 
                 instanceType = "TRIAL"
             elseif ARENA_ZONES[zoneId] or IsInstanceEndlessDungeon() then 
@@ -84,7 +89,7 @@ local function GetLocationType()
         return instanceType, isVet
     end
 
-    -- Failsafe for normal zones that flag IsUnitInDungeon but have NONE difficulty
+    -- Failsafe for edge-case zones that flag IsUnitInDungeon but report NONE difficulty
     if IsUnitInDungeon("player") then
         local zoneId = GetZoneId(GetUnitZoneIndex("player"))
         if TRIAL_ZONES[zoneId] then return "TRIAL", false end
@@ -95,13 +100,14 @@ local function GetLocationType()
     return "NONE", false
 end
 
+-- Consults user preferences to determine if the current zone deserves a log file
 local function ShouldLogHere()
     local sv = SV()
     if not sv.enabled then return false end
 
     local locType, isVet = GetLocationType()
 
-    -- Block normal difficulties universally if disabled (except housing/pvp)
+    -- Block normal difficulties universally if disabled (except housing and pvp)
     if (locType == "TRIAL" or locType == "DUNGEON" or locType == "ARENA") then
         if not isVet and not sv.logNormal then 
             return false 
@@ -123,6 +129,7 @@ local function ShouldLogHere()
     return false
 end
 
+-- Ticker management: 1-second update loop to catch manual /encounterlog toggles
 function KRT.EAL:UpdateLoopState()
     local sv = SV()
     local shouldRun = sv and sv.enabled
@@ -139,6 +146,7 @@ function KRT.EAL:UpdateLoopState()
     end
 end
 
+-- Updates the on-screen "Logging" / "No logging" indicator badge
 function KRT.EAL:UpdateIndicatorState()
     local w = self.indicator
     if not w then return end
@@ -194,6 +202,7 @@ function KRT.EAL:UpdateIndicatorState()
     w:SetMouseEnabled(sv.indicatorUnlocked)
 end
 
+-- Sets encounter log state in ESO and prints a chat heads-up if desired
 function KRT.EAL:SetEncounterLog(state)
     local currentState = IsEncounterLogEnabled()
     if currentState ~= state then
@@ -209,6 +218,7 @@ function KRT.EAL:SetEncounterLog(state)
     self:UpdateIndicatorState()
 end
 
+-- Checks if we should be logging right now and flips the switch accordingly
 function KRT.EAL:EvaluateAndApplyLogState()
     if not SV().enabled then return end
 
@@ -221,6 +231,7 @@ function KRT.EAL:EvaluateAndApplyLogState()
     self:UpdateIndicatorState()
 end
 
+-- Schedules a check after a brief loading-screen delay (because ESO API needs a few seconds to wake up)
 function KRT.EAL:Refresh()
     if not SV().enabled then return end
     self.refreshCounter = (self.refreshCounter or 0) + 1
@@ -237,7 +248,7 @@ function KRT.EAL:Refresh()
         self:EvaluateAndApplyLogState()
     end
 
-    -- Failsafe: Re-check 3 seconds later just in case ESO API was lagging during zone-in
+    -- Failsafe: Re-check 3 seconds later just in case ESO API was still buffering instance data
     zo_callLater(function()
         if self.refreshCounter == currentCounter then
             self:EvaluateAndApplyLogState()
@@ -245,6 +256,7 @@ function KRT.EAL:Refresh()
     end, (delay > 0 and delay + 3000) or 3000)
 end
 
+-- Periodically polls to sync indicator if the user typed /encounterlog manually
 function KRT.EAL:OnUpdate()
     if not SV().enabled then return end
     local isLogging = IsEncounterLogEnabled()
@@ -283,6 +295,9 @@ function KRT.EAL:CenterIndicator(axis)
     self:SaveIndicatorPos()
 end
 
+-- =========================================================
+-- Initialization
+-- =========================================================
 function KRT.EAL:Initialize()
     self.indicator = KwibusEncounterAutoLogIndicator or WINDOW_MANAGER:GetControlByName("KwibusEncounterAutoLogIndicator")
     
@@ -300,7 +315,7 @@ function KRT.EAL:Initialize()
     EM:RegisterForEvent(ADDON_NAME .. "_EALPlayerActivated", EVENT_PLAYER_ACTIVATED, function() self:Refresh() end)
     EM:RegisterForEvent(ADDON_NAME .. "_EALZoneChanged", EVENT_ZONE_CHANGED, function() self:Refresh() end)
 
-    -- Difficulty changes
+    -- Difficulty changes (normal vs veteran)
     EM:RegisterForEvent(ADDON_NAME .. "_EALVet1", EVENT_VETERAN_DIFFICULTY_CHANGED, function() self:Refresh() end)
     EM:RegisterForEvent(ADDON_NAME .. "_EALVet2", EVENT_GROUP_VETERAN_DIFFICULTY_CHANGED, function() self:Refresh() end)
 
@@ -309,6 +324,9 @@ function KRT.EAL:Initialize()
     self:Refresh()
 end
 
+-- =========================================================
+-- Settings Menu
+-- =========================================================
 function KRT.EAL:GetLAMSubmenu()
     return {
         type = "submenu",
@@ -373,10 +391,10 @@ function KRT.EAL:GetLAMSubmenu()
             },
             {
                 type = "slider",
-                name = "Start Delay (Seconds)",
-                tooltip = "Seconds to wait after entering a zone before evaluating and starting/stopping logging.",
+                name = "Delay After Zone Change (Seconds)",
+                tooltip = "Seconds to wait before deciding whether to log, allowing ESO's zone APIs to catch up.",
                 min = 0,
-                max = 10,
+                max = 30,
                 step = 1,
                 getFunc = function() return SV().delaySeconds end,
                 setFunc = function(v) SV().delaySeconds = v end,
@@ -384,21 +402,19 @@ function KRT.EAL:GetLAMSubmenu()
                 width = "full",
                 disabled = function() return not SV().enabled end,
             },
-            { type = "divider" },
             {
                 type = "checkbox",
-                name = "Log Normal Instances",
-                tooltip = "If enabled, logs Normal difficulty instances. If disabled, Normal Trials, Dungeons, and Arenas will never be logged.",
+                name = "Log Normal Difficulty",
+                tooltip = "When off, logging is prevented in Normal trials, dungeons, and arenas regardless of individual toggles.",
                 getFunc = function() return SV().logNormal end,
                 setFunc = function(v) SV().logNormal = v; self:Refresh() end,
                 default = DEFAULTS.eal.logNormal,
                 width = "full",
                 disabled = function() return not SV().enabled end,
             },
-            { type = "divider" },
             {
                 type = "checkbox",
-                name = "Trials",
+                name = "Log Trials",
                 getFunc = function() return SV().logTrials end,
                 setFunc = function(v) SV().logTrials = v; self:Refresh() end,
                 default = DEFAULTS.eal.logTrials,
@@ -407,7 +423,7 @@ function KRT.EAL:GetLAMSubmenu()
             },
             {
                 type = "checkbox",
-                name = "Dungeons",
+                name = "Log Dungeons",
                 getFunc = function() return SV().logDungeons end,
                 setFunc = function(v) SV().logDungeons = v; self:Refresh() end,
                 default = DEFAULTS.eal.logDungeons,
@@ -416,7 +432,7 @@ function KRT.EAL:GetLAMSubmenu()
             },
             {
                 type = "checkbox",
-                name = "Arenas",
+                name = "Log Arenas",
                 getFunc = function() return SV().logArenas end,
                 setFunc = function(v) SV().logArenas = v; self:Refresh() end,
                 default = DEFAULTS.eal.logArenas,
@@ -425,7 +441,7 @@ function KRT.EAL:GetLAMSubmenu()
             },
             {
                 type = "checkbox",
-                name = "Houses",
+                name = "Log Houses",
                 getFunc = function() return SV().logHouses end,
                 setFunc = function(v) SV().logHouses = v; self:Refresh() end,
                 default = DEFAULTS.eal.logHouses,
@@ -434,7 +450,7 @@ function KRT.EAL:GetLAMSubmenu()
             },
             {
                 type = "checkbox",
-                name = "PvP (Cyrodiil/IC/BGs)",
+                name = "Log PvP (Cyrodiil, IC, Battlegrounds)",
                 getFunc = function() return SV().logPvP end,
                 setFunc = function(v) SV().logPvP = v; self:Refresh() end,
                 default = DEFAULTS.eal.logPvP,

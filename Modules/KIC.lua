@@ -1,3 +1,5 @@
+﻿-- Kwibus In Combat (KIC)
+-- Massive, impossible-to-miss on-screen text alerting you that you just got into combat (or that the enemy finally died).
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
@@ -24,15 +26,18 @@ local DEFAULTS = { kic = {
 
 KRT.KIC = {
     id = "kic",
-    defaults = DEFAULTS.kic, hideTimerId = nil }
+    defaults = DEFAULTS.kic,
+    hideTimerId = nil,
+}
 
-local FALLBACK_COLOR = { r = 1, g = 1, b = 1 } -- PERFORMANCE FIX
+local FALLBACK_COLOR = { r = 1, g = 1, b = 1 } -- Safe white color in case user settings give us nil
 
 function KRT.KIC:SV()
     return KRT.GetModuleSV(self.id, self.defaults)
 end
 local function SV() return KRT.KIC:SV() end
 
+-- Cancels any pending hide timer so rapid combat transitions don't blink out early
 local function KIC_CancelHide()
     if KRT.KIC.hideTimerId ~= nil then
         zo_removeCallLater(KRT.KIC.hideTimerId)
@@ -40,16 +45,19 @@ local function KIC_CancelHide()
     end
 end
 
+-- Anchors the overlay window using stored offsets
 function KRT.KIC:ApplyAnchor()
     KRT.ApplyCenterAnchor(KwibusInCombat_UI, self:SV(), DEFAULTS.kic.offsetY)
 end
 
+-- Applies user's custom font scaling factor
 function KRT.KIC:ApplyFontScale()
     local sv = self:SV()
     if not (KwibusInCombat_UIText and sv) then return end
     KwibusInCombat_UIText:SetScale(sv.fontScale or 1.0)
 end
 
+-- Enables dragging the frame around the screen in reposition mode
 function KRT.KIC:EnableDragging(enable)
     local sv = self:SV()
     local ui = KwibusInCombat_UI
@@ -62,6 +70,7 @@ function KRT.KIC:EnableDragging(enable)
     KRT.EnableDragging(ui, label, sv, enable, function() self:ApplyAnchor() end)
 end
 
+-- Displays the combat alert text with a given color and self-destruct timer
 function KRT.KIC:ShowMessage(text, color, durationMs)
     local sv = self:SV()
     if not (sv and sv.enabled) then return end
@@ -73,9 +82,9 @@ function KRT.KIC:ShowMessage(text, color, durationMs)
     local c = color or FALLBACK_COLOR
     KwibusInCombat_UIText:SetColor(c.r or 1, c.g or 1, c.b or 1, 1)
 
-    -- self:ApplyFontScale() -- OPTIMIZED: Font scale is static, no need to re-apply on every combat change
     KwibusInCombat_UI:SetHidden(false)
 
+    -- Auto-hide after the specified duration (unless reposition mode is on)
     self.hideTimerId = zo_callLater(function()
         local sv2 = self:SV()
         if not (sv2 and sv2.enableReposition) then
@@ -85,10 +94,11 @@ function KRT.KIC:ShowMessage(text, color, durationMs)
     end, durationMs or 3000)
 end
 
+-- Triggers enter/exit combat messages
 function KRT.KIC:OnCombatStateChanged(inCombat)
     local sv = self:SV()
     if not (sv and sv.enabled) then return end
-    if sv.enableReposition then return end
+    if sv.enableReposition then return end -- Don't interrupt preview/move mode
     if inCombat then
         self:ShowMessage(sv.enterText, sv.enterColor, sv.durationMs)
     else
@@ -96,6 +106,7 @@ function KRT.KIC:OnCombatStateChanged(inCombat)
     end
 end
 
+-- Helpful test command so you don't have to go aggro a mudcrab just to test your text
 function KRT.KIC:RegisterSlashCommands()
     SLASH_COMMANDS["/kic"] = function(arg)
         arg = (arg or ""):lower()
@@ -112,11 +123,14 @@ function KRT.KIC:RegisterSlashCommands()
                 self:EnableDragging(prevMove)
             end, (sv.durationMs or 3000) + 500)
         else
-            d("[KRT] /kic test")
+            d("[KRT] Type '/kic test' to preview combat alert messages.")
         end
     end
 end
 
+-- =========================================================
+-- Initialization
+-- =========================================================
 function KRT.KIC:Initialize()
     local sv = self:SV()
     if not sv then return end
@@ -144,6 +158,9 @@ function KRT.KIC:Initialize()
     self:RegisterSlashCommands()
 end
 
+-- =========================================================
+-- Settings Menu
+-- =========================================================
 function KRT.KIC:GetLAMSubmenu()
     return {
         type = "submenu",
@@ -166,7 +183,7 @@ function KRT.KIC:GetLAMSubmenu()
             {
                 type = "checkbox",
                 name = "Enable Repositioning (Drag)",
-                tooltip = "Shows a drag box and a move me message.",
+                tooltip = "Shows a drag box and a 'move me' label so you can park the alert wherever you like.",
                 getFunc = function() return SV().enableReposition end,
                 setFunc = function(v)
                     SV().enableReposition = v

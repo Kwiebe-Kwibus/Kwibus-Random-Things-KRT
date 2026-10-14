@@ -1,3 +1,5 @@
+﻿-- Kwibus Overload Watcher (KOW)
+-- Simple on-screen reminder that screams at you while Sorcerer Overload is toggled on so you don't drain all your ultimate into the void.
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
@@ -21,7 +23,7 @@ local DEFAULTS = { kow = {
 KRT.KOW = {
     id = "kow",
     defaults = DEFAULTS.kow,
-    TARGET_BUFF_ID = 24806,
+    TARGET_BUFF_ID = 24806, -- Overload buff ID
 
     ui = nil,
     lbl = nil,
@@ -31,6 +33,7 @@ function KRT.KOW:SV()
     return KRT.GetModuleSV(self.id, self.defaults)
 end
 
+-- Checks if your player currently has the Overload toggle buff active
 function KRT.KOW:HasOverloadBuff()
     local numBuffs = GetNumBuffs("player")
     for i = 1, numBuffs do
@@ -42,6 +45,7 @@ function KRT.KOW:HasOverloadBuff()
     return false
 end
 
+-- Builds the top-level overlay on demand
 function KRT.KOW:EnsureOverlay()
     if self.ui then return end
     local sv = self:SV()
@@ -70,6 +74,7 @@ function KRT.KOW:EnsureOverlay()
     self:UpdateTextStyle()
 end
 
+-- Refreshes label font scaling, colors, and horizontal alignment
 function KRT.KOW:UpdateTextStyle()
     local ui, lbl = self.ui, self.lbl
     if not (ui and lbl) then return end
@@ -96,15 +101,18 @@ function KRT.KOW:UpdateTextStyle()
     KRT.ResizeTextHitbox("KOW_Resize", ui, lbl, scale, 80, 30)
 end
 
+-- Applies center anchor based on user offset coordinates
 function KRT.KOW:ApplyAnchor()
     KRT.ApplyCenterAnchor(self.ui, self:SV(), DEFAULTS.kow.offsetY)
 end
 
+-- Toggles drag/move handles for window repositioning
 function KRT.KOW:EnableDragging(enable)
     local sv = self:SV()
     KRT.EnableDragging(self.ui, self.lbl, sv, enable, function() self:ApplyAnchor() end, function() self:UpdateDisplay() end)
 end
 
+-- Updates overlay visibility depending on whether Overload is on (or preview mode is active)
 function KRT.KOW:UpdateDisplay(hasBuff)
     local sv = self:SV()
     if not sv then return end
@@ -127,6 +135,9 @@ function KRT.KOW:UpdateDisplay(hasBuff)
     self.ui:SetHidden(not hasBuff)
 end
 
+-- =========================================================
+-- Initialization
+-- =========================================================
 function KRT.KOW:Initialize()
     local sv = self:SV()
     if not sv then return end
@@ -136,17 +147,12 @@ function KRT.KOW:Initialize()
     self:UpdateTextStyle()
     self:EnableDragging(sv.enableReposition)
 
-    EM:RegisterForEvent(ADDON_NAME .. "_KOW_Activated", EVENT_PLAYER_ACTIVATED, function()
+    -- Listen for player effect changes specifically filtered to the Overload buff
+    EM:RegisterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, function(_, changeType, _, _, _, _, _, _, _, _, _, _, _, _, abilityId)
         local sv2 = self:SV()
         if not (sv2 and sv2.enabled) then return end
-        self:UpdateDisplay()
-    end)
-
-    EM:RegisterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, function(_, changeType, _, _, unitTag, _, _, _, _, _, _, _, _, _, _, abilityId)
-        local sv2 = self:SV()
-        if not (sv2 and sv2.enabled) then return end
-        if unitTag ~= "player" then return end
         if abilityId ~= self.TARGET_BUFF_ID then return end
+
         if changeType == EFFECT_RESULT_GAINED then
             self:UpdateDisplay(true)
         elseif changeType == EFFECT_RESULT_FADED then
@@ -157,17 +163,25 @@ function KRT.KOW:Initialize()
     end)
     EM:AddFilterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, REGISTER_FILTER_UNIT_TAG, "player")
 
-    self:UpdateDisplay()
+    -- Initial state sync on load
+    EM:RegisterForEvent(ADDON_NAME .. "_KOW_Activated", EVENT_PLAYER_ACTIVATED, function()
+        local sv2 = self:SV()
+        if not (sv2 and sv2.enabled) then return end
+        self:ApplyAnchor()
+        self:UpdateTextStyle()
+        self:UpdateDisplay()
+    end)
 end
 
-local function SV()
-    return KRT.sv
-end
+-- =========================================================
+-- Settings Menu
+-- =========================================================
+local function SV() return KRT.sv end
 
 function KRT.KOW:GetLAMSubmenu()
     return {
         type = "submenu",
-        name = "Overload Watcher",
+        name = "Kwibus Overload Watcher",
         controls = {
             {
                 type = "checkbox",

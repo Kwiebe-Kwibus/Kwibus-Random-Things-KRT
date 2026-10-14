@@ -1,3 +1,5 @@
+﻿-- Kwibus Group User ID (GUID)
+-- Standardizes display names across groups, leaderboards, and rosters so you know who is actually who.
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 
@@ -14,7 +16,7 @@ local function SV()
     return KRT.GetModuleSV("guid", DEFAULTS.guid)
 end
 
--- Helper to remove the "@" at the start of a string
+-- Helper to decapitate the "@" from an account name (e.g., "@PlayerOne" -> "PlayerOne")
 local function StripAt(name)
     if type(name) == "string" and SV().stripAtSymbol then
         if name:byte(1) == 64 then
@@ -24,7 +26,11 @@ local function StripAt(name)
     return name
 end
 
--- Post-hook functions — each returns false to allow normal execution to continue
+-- =========================================================
+-- UI Post-Hooks (Each returns false so ESO doesn't swallow original logic)
+-- =========================================================
+
+-- Replaces character names in the group window with the player's account name
 local function groupEntryPostHook(selfControl, control, data)
     if not SV().enabled then return false end
     if not ZO_ShouldPreferUserId() then return false end
@@ -33,6 +39,7 @@ local function groupEntryPostHook(selfControl, control, data)
     return false
 end
 
+-- Overrides leaderboard entries to display cleaner account names
 local function leaderboardEntryPostHook(selfControl, control, data)
     if not SV().enabled then return false end
     if not ZO_ShouldPreferUserId() then return false end
@@ -41,6 +48,7 @@ local function leaderboardEntryPostHook(selfControl, control, data)
     return false
 end
 
+-- Makes the current Cyrodiil Emperor's name show up as their account name (and adds a tooltip for their character)
 local function refreshEmperorPostHook(selfControl, control, data)
     if not SV().enabled then return false end
     if not ZO_ShouldPreferUserId() then return false end
@@ -62,6 +70,7 @@ local function refreshEmperorPostHook(selfControl, control, data)
     return false
 end
 
+-- Enhances the hover tooltip on social list rows to show clean account names
 local function socialListOnMouseEnterPostHook(selfControl, control)
     if not SV().enabled then return false end
     if not ZO_ShouldPreferUserId() then return false end
@@ -79,7 +88,7 @@ local function socialListOnMouseEnterPostHook(selfControl, control)
     return false
 end
 
--- New Hooks for Friends and Guild List
+-- Ensures your friends list respects account names without the '@' prefix
 local function friendsListEntryPostHook(selfControl, control, data)
     if not SV().enabled then return false end
     
@@ -90,6 +99,7 @@ local function friendsListEntryPostHook(selfControl, control, data)
     return false
 end
 
+-- Keeps the guild roster cleanly formatted
 local function guildRosterEntryPostHook(selfControl, control, data)
     if not SV().enabled then return false end
     
@@ -100,6 +110,9 @@ local function guildRosterEntryPostHook(selfControl, control, data)
     return false
 end
 
+-- =========================================================
+-- Initialization & Registration
+-- =========================================================
 function KRT.GUID:Initialize()
     if GROUP_LIST then
         ZO_PostHook(GROUP_LIST, "SetupGroupEntry", groupEntryPostHook)
@@ -115,7 +128,6 @@ function KRT.GUID:Initialize()
         ZO_PostHook(ZO_SocialListKeyboard, "CharacterName_OnMouseEnter", socialListOnMouseEnterPostHook)
     end
     
-    -- Added Hooks for Friends and Guild lists
     if ZO_KeyboardFriendsList then
         ZO_PostHook(ZO_KeyboardFriendsList, "SetupFriendRow", friendsListEntryPostHook)
     end
@@ -138,15 +150,6 @@ function KRT.GUID:GetLAMSubmenu()
                 default = DEFAULTS.guid.enabled,
                 width = "full",
             },
-           -- {
-            --    type = "checkbox",
-           --     name = "Remove @ from User IDs",
-           --     tooltip = "Strips the '@' symbol from the beginning of player display names in all managed lists.",
-           --     getFunc = function() return SV().stripAtSymbol end,
-           --     setFunc = function(v) SV().stripAtSymbol = v end,
-            --    default = DEFAULTS.guid.stripAtSymbol,
-            --    width = "full",
-           -- },
         }
     }
 end

@@ -1,3 +1,7 @@
+﻿-- Kwibus Spaulder & Lead Passing (KWS)
+-- Automates kicking and reinviting players to reset Spaulder of Ruin / buff states,
+-- and handles passing group lead smoothly between the kicker and raid lead.
+-- Because organizing 12 people to reset instance buffs manually is pure chaos.
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER

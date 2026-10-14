@@ -1,3 +1,6 @@
+﻿-- Kwibus Item Set Indicator (ISI)
+-- The all-seeing eye for your build: displays your equipped sets, piece counts, front/back bar weapons,
+-- armor weights (Light/Medium/Heavy), traits, and reminds you when you accidentally left a piece of gear in the bank.
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
@@ -160,15 +163,15 @@ local PERFECTED_PATTERNS = {
     -- English
     "^Perfected%s+",
     "%s+Perfected$",
-    -- Russian (Совершенный, Совершенная, Совершенное, Совершенные)
-    "^Совершенный%s+",
-    "^Совершенная%s+",
-    "^Совершенное%s+",
-    "^Совершенные%s+",
-    "%s+Совершенный$",
-    "%s+Совершенная$",
-    "%s+Совершенное$",
-    "%s+Совершенные$",
+    -- Russian (Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ð¹, Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ð°Ñ, Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ð¾Ðµ, Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ðµ)
+    "^Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ð¹%s+",
+    "^Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ð°Ñ%s+",
+    "^Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ð¾Ðµ%s+",
+    "^Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ðµ%s+",
+    "%s+Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ð¹$",
+    "%s+Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ð°Ñ$",
+    "%s+Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ð¾Ðµ$",
+    "%s+Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ðµ$",
     -- German
     "^Perfektioniertes%s+",
     "^Perfektionierte%s+",
@@ -188,7 +191,7 @@ local function CleanSetName(setName)
 
     local clean = FormatLocalizedString(setName)
     
-    -- Strip brackets if present [Perfected] / [Совершенный]
+    -- Strip brackets if present [Perfected] / [Ð¡Ð¾Ð²ÐµÑ€ÑˆÐµÐ½Ð½Ñ‹Ð¹]
     clean = clean:gsub("%[%s*.-%s*%]", "")
     
     -- Strip localized perfected words
@@ -563,16 +566,16 @@ function KRT.ISI:UpdateOverlay()
             local isRussian = (lang == "ru")
             self._slotNamesLang = lang
             self.slotNames = {
-                [EQUIP_SLOT_HEAD] = (SI_EQUIPSLOT0 and FormatLocalizedString(GetString(SI_EQUIPSLOT0))) or (isRussian and "Голова" or "Head"),
-                [EQUIP_SLOT_CHEST] = (SI_EQUIPSLOT2 and FormatLocalizedString(GetString(SI_EQUIPSLOT2))) or (isRussian and "Нагрудник" or "Chest"),
-                [EQUIP_SLOT_SHOULDERS] = (SI_EQUIPSLOT3 and FormatLocalizedString(GetString(SI_EQUIPSLOT3))) or (isRussian and "Плечи" or "Shoulders"),
-                [EQUIP_SLOT_HAND] = isRussian and "Кисти" or "Hands",
-                [EQUIP_SLOT_WAIST] = isRussian and "Пояс" or "Belt",
-                [EQUIP_SLOT_LEGS] = (SI_EQUIPSLOT8 and FormatLocalizedString(GetString(SI_EQUIPSLOT8))) or (isRussian and "Поножи" or "Legs"),
-                [EQUIP_SLOT_FEET] = (SI_EQUIPSLOT9 and FormatLocalizedString(GetString(SI_EQUIPSLOT9))) or (isRussian and "Обувь" or "Feet"),
-                [EQUIP_SLOT_NECK] = (SI_EQUIPSLOT1 and FormatLocalizedString(GetString(SI_EQUIPSLOT1))) or (isRussian and "Шея" or "Neck"),
-                [EQUIP_SLOT_RING1] = (SI_EQUIPSLOT11 and FormatLocalizedString(GetString(SI_EQUIPSLOT11))) or (isRussian and "Кольцо 1" or "Ring 1"),
-                [EQUIP_SLOT_RING2] = (SI_EQUIPSLOT12 and FormatLocalizedString(GetString(SI_EQUIPSLOT12))) or (isRussian and "Кольцо 2" or "Ring 2"),
+                [EQUIP_SLOT_HEAD] = (SI_EQUIPSLOT0 and FormatLocalizedString(GetString(SI_EQUIPSLOT0))) or (isRussian and "Ð“Ð¾Ð»Ð¾Ð²Ð°" or "Head"),
+                [EQUIP_SLOT_CHEST] = (SI_EQUIPSLOT2 and FormatLocalizedString(GetString(SI_EQUIPSLOT2))) or (isRussian and "ÐÐ°Ð³Ñ€ÑƒÐ´Ð½Ð¸Ðº" or "Chest"),
+                [EQUIP_SLOT_SHOULDERS] = (SI_EQUIPSLOT3 and FormatLocalizedString(GetString(SI_EQUIPSLOT3))) or (isRussian and "ÐŸÐ»ÐµÑ‡Ð¸" or "Shoulders"),
+                [EQUIP_SLOT_HAND] = isRussian and "ÐšÐ¸ÑÑ‚Ð¸" or "Hands",
+                [EQUIP_SLOT_WAIST] = isRussian and "ÐŸÐ¾ÑÑ" or "Belt",
+                [EQUIP_SLOT_LEGS] = (SI_EQUIPSLOT8 and FormatLocalizedString(GetString(SI_EQUIPSLOT8))) or (isRussian and "ÐŸÐ¾Ð½Ð¾Ð¶Ð¸" or "Legs"),
+                [EQUIP_SLOT_FEET] = (SI_EQUIPSLOT9 and FormatLocalizedString(GetString(SI_EQUIPSLOT9))) or (isRussian and "ÐžÐ±ÑƒÐ²ÑŒ" or "Feet"),
+                [EQUIP_SLOT_NECK] = (SI_EQUIPSLOT1 and FormatLocalizedString(GetString(SI_EQUIPSLOT1))) or (isRussian and "Ð¨ÐµÑ" or "Neck"),
+                [EQUIP_SLOT_RING1] = (SI_EQUIPSLOT11 and FormatLocalizedString(GetString(SI_EQUIPSLOT11))) or (isRussian and "ÐšÐ¾Ð»ÑŒÑ†Ð¾ 1" or "Ring 1"),
+                [EQUIP_SLOT_RING2] = (SI_EQUIPSLOT12 and FormatLocalizedString(GetString(SI_EQUIPSLOT12))) or (isRussian and "ÐšÐ¾Ð»ÑŒÑ†Ð¾ 2" or "Ring 2"),
             }
         end
         local slotNames = self.slotNames

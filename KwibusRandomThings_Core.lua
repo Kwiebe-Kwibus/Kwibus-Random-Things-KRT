@@ -1,9 +1,9 @@
-local ADDON_NAME = "KwibusRandomThings"
+﻿local ADDON_NAME = "KwibusRandomThings"
 local ADDON_VERSION = "1.4.6"
 
 local EM = EVENT_MANAGER
 
--- Global umbrella table (modules attach to this)
+-- Global umbrella table (all the modules cling to this mother ship for dear life)
 KwibusRandomThings = KwibusRandomThings or {
     name = ADDON_NAME,
     version = ADDON_VERSION,
@@ -12,9 +12,14 @@ KwibusRandomThings = KwibusRandomThings or {
 }
 local KRT = KwibusRandomThings
 
--- Helpers (shared)
+-- =========================================================
+-- Helpers (Shared functions so we don't rewrite them 40 times)
+-- =========================================================
+
+-- Restricts a number strictly between 0 and 1, because colors hate negative space
 function KRT.Clamp01(x) return zo_clamp(tonumber(x) or 0, 0, 1) end
 
+-- Turns raw RGB floats (0-1) into ESO's favorite inline hex string (|cRRGGBB)
 function KRT.RGBToHex(r, g, b)
     r = KRT.Clamp01(r); g = KRT.Clamp01(g); b = KRT.Clamp01(b)
     local R = zo_floor(r * 255 + 0.5)
@@ -23,9 +28,13 @@ function KRT.RGBToHex(r, g, b)
     return string.format("|c%02X%02X%02X", R, G, B)
 end
 
+-- Checks if something is an honest-to-goodness text string, not nil, false, or empty ""
 function KRT.IsNonEmptyString(s) return type(s) == "string" and s ~= "" end
+
+-- Returns the table, or creates an empty one so Lua doesn't throw a fit indexing nil
 function KRT.EnsureTable(v) return (type(v) == "table") and v or {} end
 
+-- Recursively fills in missing default settings without blowing away what the user customized
 function KRT.DeepMergeDefaults(target, source)
     for k, v in pairs(source) do
         if type(v) == "table" then
@@ -40,10 +49,11 @@ function KRT.DeepMergeDefaults(target, source)
     end
 end
 
--- PERFORMANCE FIX: Static queue executor prevents inline closure allocations and batches debounces
+-- Static queue executor: prevents Lua garbage collector from crying by avoiding closure spam every frame
 local _debounceQueue = {}
 local _isDebounceScheduled = false
 
+-- Flushes all queued tasks waiting for the next game tick
 local function ProcessDebounceQueue()
     _isDebounceScheduled = false
     local queue = _debounceQueue
@@ -55,6 +65,7 @@ local function ProcessDebounceQueue()
     end
 end
 
+-- Postpones a task to run once on the next frame (deduplicating multiple calls with the same key)
 function KRT.DebounceNextFrame(key, fn)
     _debounceQueue[key] = fn
     if not _isDebounceScheduled then
@@ -63,7 +74,7 @@ function KRT.DebounceNextFrame(key, fn)
     end
 end
 
--- Shared SavedVariables accessor
+-- Safe getter for module SavedVariables table
 function KRT.GetModuleSV(id, defaults)
     if not (KRT.sv and id) then return defaults or {} end
     if type(KRT.sv[id]) ~= "table" then
@@ -72,13 +83,14 @@ function KRT.GetModuleSV(id, defaults)
     return KRT.sv[id]
 end
 
--- Shared UI Overlay Helpers
+-- Centers a UI control relative to GuiRoot using saved offsets
 function KRT.ApplyCenterAnchor(control, sv, defaultOffsetY)
     if not (control and sv) then return end
     control:ClearAnchors()
     control:SetAnchor(CENTER, GuiRoot, CENTER, sv.offsetX or 0, sv.offsetY or (defaultOffsetY or 0))
 end
 
+-- Hook mouse handlers so the user can drag windows around when "Reposition" is turned on
 function KRT.EnableDragging(ui, label, sv, enable, applyAnchorFn, onDisabledFn)
     if not (ui and label and sv) then return end
 
@@ -116,6 +128,7 @@ function KRT.EnableDragging(ui, label, sv, enable, applyAnchorFn, onDisabledFn)
     end
 end
 
+-- Dynamically adjusts the bounding box around text labels so you don't click invisible ghosts
 function KRT.ResizeTextHitbox(debounceKey, win, label, scale, minW, minH)
     KRT.DebounceNextFrame(debounceKey, function()
         local tries = 0
@@ -123,6 +136,7 @@ function KRT.ResizeTextHitbox(debounceKey, win, label, scale, minW, minH)
             tries = tries + 1
             local w = (label:GetTextWidth() or 0) * scale + 24
             local h = (label:GetTextHeight() or 0) * scale + 24
+            -- UI elements might not report accurate dimensions immediately after loading
             if (w <= 26 or h <= 26) and tries < 6 then
                 zo_callLater(Resize, 0)
                 return
@@ -136,7 +150,7 @@ function KRT.ResizeTextHitbox(debounceKey, win, label, scale, minW, minH)
     end)
 end
 
--- Shared Zone Data
+-- ESO Zone IDs for 12-man Trials
 KRT.TRIAL_ZONES = {
     [638] = true,  -- Aetherian Archive
     [639] = true,  -- Hel Ra Citadel
@@ -153,6 +167,7 @@ KRT.TRIAL_ZONES = {
     [1478] = true, -- Lucent Citadel
 }
 
+-- ESO Zone IDs for 4-man & Solo Arenas
 KRT.ARENA_ZONES = {
     [636] = true,  -- Dragonstar Arena
     [677] = true,  -- Maelstrom Arena
@@ -160,13 +175,16 @@ KRT.ARENA_ZONES = {
     [1227] = true, -- Vateshran Hollows
 }
 
--- Module registry
+-- Registers an individual feature module into KRT's module list
 function KRT:RegisterModule(moduleTable)
     if type(moduleTable) ~= "table" then return end
     if not moduleTable.id then return end
     table.insert(self.modules, moduleTable)
 end
 
+-- =========================================================
+-- Unified Settings Menu (LibAddonMenu tabbed interface)
+-- =========================================================
 local function BuildUnifiedSettings()
     local LAM = LibAddonMenu2
     if not LAM then return end
@@ -185,19 +203,19 @@ local function BuildUnifiedSettings()
     local moduleMap = {}
     local options = {}
 
+    -- Strips color codes like |cFFFFFF so button labels look clean
     local function StripColorCodes(str)
         if type(str) ~= "string" then return "" end
         return str:gsub("|c%x%x%x%x%x%x", ""):gsub("|r", "")
     end
 
-    -- Collect all module submenus
+    -- Collect all module submenus and register them with LAM
     for _, mod in ipairs(KRT.modules) do
         if mod.id and mod.GetLAMSubmenu then
             local sub = mod:GetLAMSubmenu()
             if sub and sub.controls then
                 local clean = StripColorCodes(sub.name or mod.id)
                 if clean == "" then clean = mod.id:upper() end
-                -- Use full clean module name by default, allowing optional tabName override
                 local tabLabel = mod.tabName or mod.shortName or clean
 
                 local item = {
@@ -220,7 +238,7 @@ local function BuildUnifiedSettings()
 
     if #moduleList == 0 then return end
 
-    -- Determine initial active tab
+    -- Remember what tab the user was looking at last time they opened settings
     local activeModuleId = moduleList[1].id
     if KRT.sv and KRT.sv.lastActiveModule and moduleMap[KRT.sv.lastActiveModule] then
         activeModuleId = KRT.sv.lastActiveModule
@@ -232,6 +250,7 @@ local function BuildUnifiedSettings()
     local submenus = {}
     local isInitialized = false
 
+    -- Calculates exactly where the tab buttons should sit below the LAM header
     local function GetHeaderBottomY(panel)
         local bottom = 54
         if panel and panel.info and panel.info.GetBottom and panel.GetTop then
@@ -243,6 +262,7 @@ local function BuildUnifiedSettings()
         return bottom + 8
     end
 
+    -- Neatly arranges the module tab buttons in rows based on available window width
     local function LayoutTabs()
         if not tabBar or not panelControl then return end
         local totalWidth = tabBar:GetWidth()
@@ -294,6 +314,7 @@ local function BuildUnifiedSettings()
         end
     end
 
+    -- Flips the active settings tab and displays the selected module's options
     local function SwitchToModule(targetId)
         if not targetId or not moduleMap[targetId] then return end
         activeModuleId = targetId
@@ -301,7 +322,7 @@ local function BuildUnifiedSettings()
             KRT.sv.lastActiveModule = targetId
         end
 
-        -- Update tab buttons appearance
+        -- Update tab buttons appearance (gold for active, gray for inactive)
         for i, item in ipairs(moduleList) do
             local btn = tabButtons[i]
             if btn then
@@ -314,7 +335,7 @@ local function BuildUnifiedSettings()
             end
         end
 
-        -- Switch module submenus visibility and anchor to top of scroll
+        -- Toggle visibility for submenus: only the active tab gets the stage
         for _, item in ipairs(moduleList) do
             local subCtrl = submenus[item.id]
             if subCtrl then
@@ -340,7 +361,7 @@ local function BuildUnifiedSettings()
             end
         end
 
-        -- Reset scroll position so new tab starts at top
+        -- Reset scroll position so the user doesn't end up stranded at the bottom of the page
         if panelControl and panelControl.container then
             if ZO_Scroll_ResetToTop then
                 ZO_Scroll_ResetToTop(panelControl.container)
@@ -350,6 +371,7 @@ local function BuildUnifiedSettings()
         end
     end
 
+    -- Builds the top pinned tab bar and hooks resize listeners
     local function InitializeTabBar(panel)
         if isInitialized or not panel then return end
         isInitialized = true
@@ -444,14 +466,17 @@ local function BuildUnifiedSettings()
     end)
 end
 
+-- =========================================================
+-- Addon Initialization Entry Point
+-- =========================================================
 local function OnAddOnLoaded(_, addonName)
     if addonName ~= ADDON_NAME then return end
     EM:UnregisterForEvent(ADDON_NAME, EVENT_ADD_ON_LOADED)
 
-    -- IMPORTANT: pass empty defaults so ZO_SavedVars doesn't do nested merging for us
+    -- IMPORTANT: pass empty defaults so ZO_SavedVars doesn't do messy recursive merging for us
     KRT.sv = ZO_SavedVars:NewAccountWide("KwibusRandomThingsSV", 1, nil, {}, GetWorldName())
 
-    -- Create/merge SV per module, then init module
+    -- Create/merge SavedVariables per module, then wake up each module
     for _, mod in ipairs(KRT.modules) do
         local id = mod.id
         local defaults = mod.defaults

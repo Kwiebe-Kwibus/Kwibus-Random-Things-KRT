@@ -1,3 +1,6 @@
+﻿-- Kwibus Kromitor Moment (KM)
+-- Monitors your Archdruid Devyric monster set so you don't waste your heavy attacks or forget to proc Vulnerability.
+-- Also hooks into LibSkillBlocker so you don't accidentally cast Flare or other blocked abilities when you shouldn't.
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
@@ -18,7 +21,7 @@ local DEFAULTS = { km = {
     showStaticLabel = true,
     labelScale = 1.8,
     debugEnabled = false,
-    blockedAbilityIds = { [61489] = true },
+    blockedAbilityIds = { [61489] = true }, -- Default: Camouflaged Hunter / Inner Light / Flare ID
     offsetX = 0,
     offsetY = -200,
     enableReposition = false,
@@ -27,11 +30,11 @@ local DEFAULTS = { km = {
 KRT.KM = {
     id = "km",
     defaults = DEFAULTS.km,
-    ARCHDRUID_ABILITY_ID = 176816,
+    ARCHDRUID_ABILITY_ID = 176816, -- Archdruid Devyric proc effect
     DEFAULT_FLARE_ID = 61489,
     MIN_PIECES = 2,
     SLOTS = { EQUIP_SLOT_HEAD, EQUIP_SLOT_SHOULDERS },
-    HARD_COOLDOWN = 15,
+    HARD_COOLDOWN = 15,            -- Hard 15-second internal cooldown built into the game
 
     lastArchdruidTime = 0,
     _lastArchdruidCount = nil,
@@ -63,6 +66,7 @@ function KRT.KM:HasLibSkillBlocker()
     return LSB ~= nil
 end
 
+-- Checks if a set name corresponds to Archdruid Devyric in either English or Russian
 local function IsArchdruidSetName(setName)
     if not IsNonEmptyString(setName) then return false end
     local lower = zo_strlower(setName)
@@ -71,6 +75,7 @@ local function IsArchdruidSetName(setName)
     return false
 end
 
+-- Counts how many Archdruid set pieces are currently equipped (Head and Shoulder slots)
 function KRT.KM:_ComputeArchdruidPieceCount()
     local count = 0
     for _, slot in ipairs(self.SLOTS) do
@@ -90,6 +95,7 @@ function KRT.KM:_ComputeArchdruidPieceCount()
     return count
 end
 
+-- Caches piece count for 5 seconds to avoid inspecting gear continuously during frantic combat
 function KRT.KM:GetArchdruidPieceCountCached(maxAgeMs)
     local nowMs = GetFrameTimeMilliseconds()
     if (nowMs - (self._piecesCacheAtMs or 0)) > (maxAgeMs or 5000) then
@@ -99,10 +105,12 @@ function KRT.KM:GetArchdruidPieceCountCached(maxAgeMs)
     return self._piecesCacheCount or 0
 end
 
+-- Returns true if we actually have the full 2-piece monster set active
 function KRT.KM:HasTwoPieces()
     return self:GetArchdruidPieceCountCached(5000) >= self.MIN_PIECES
 end
 
+-- Calculates how much time is left on the 15-second internal cooldown
 function KRT.KM:GetCooldownRemaining()
     local elapsed = GetGameTimeSeconds() - (self.lastArchdruidTime or 0)
     local remaining = (self.HARD_COOLDOWN or 15) - elapsed
@@ -113,6 +121,9 @@ function KRT.KM:IsOnCooldown()
     return self:GetCooldownRemaining() > 0
 end
 
+-- =========================================================
+-- UI Overlay Creation & Dragging
+-- =========================================================
 function KRT.KM:CreateWarningWindow()
     if self.warningWindow then return end
 
@@ -166,6 +177,11 @@ function KRT.KM:EnableDragging(enable)
     end)
 end
 
+-- =========================================================
+-- Combat & Cooldown Tracking
+-- =========================================================
+
+-- Fired when Archdruid Devyric procs from your heavy attack
 function KRT.KM:OnCombatEvent(eventCode, result, isError, abilityName, abilityGraphic, abilityActionSlotType, sourceName, sourceType, targetName, targetType, hitValue, powerType, damageType, log, sourceUnitId, targetUnitId, abilityId)
     if sourceType and sourceType ~= COMBAT_UNIT_TYPE_PLAYER then return end
 
@@ -183,6 +199,7 @@ function KRT.KM:OnCombatEvent(eventCode, result, isError, abilityName, abilityGr
     end
 end
 
+-- Starts or stops the 250ms update ticker based on combat and repositioning state
 function KRT.KM:UpdateLoopState()
     local sv = self:SV()
     local shouldRun = sv and sv.enabled and (sv.enableReposition or IsUnitInCombat("player"))
@@ -204,6 +221,7 @@ function KRT.KM:UpdateLoopState()
     end
 end
 
+-- Toggles event listening for Archdruid procs
 function KRT.KM:ToggleBackgroundLoops(enable)
     if enable and not self._loopsRegistered then
         EM:RegisterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT, function(...)
@@ -220,6 +238,7 @@ function KRT.KM:ToggleBackgroundLoops(enable)
     end
 end
 
+-- Runs every 250ms to decide whether the warning label should be shown
 function KRT.KM:OnUpdate()
     local sv = self:SV()
     if not (sv and self.warningWindow) then return end
@@ -250,6 +269,9 @@ function KRT.KM:OnUpdate()
     self.warningWindow:SetHidden(not show)
 end
 
+-- =========================================================
+-- LibSkillBlocker Integration
+-- =========================================================
 function KRT.KM:_EnsureSkillBlockRegistered(abilityId)
     if self.registeredBlocks[abilityId] then return end
     if not LSB then return end
@@ -285,6 +307,7 @@ function KRT.KM:SetupSkillBlocking()
     end
 end
 
+-- Formats the list of blocked abilities for the settings panel
 function KRT.KM:GetBlockedAbilityListText()
     local sv = self:SV()
     if not sv then return "None" end
@@ -338,6 +361,9 @@ function KRT.KM:RegisterSlashCommands()
     end
 end
 
+-- =========================================================
+-- Initialization
+-- =========================================================
 function KRT.KM:Initialize()
     local sv = self:SV()
     if not sv then return end
@@ -374,6 +400,9 @@ function KRT.KM:Initialize()
     end
 end
 
+-- =========================================================
+-- Settings Menu
+-- =========================================================
 local function SV()
     return KRT.sv
 end
