@@ -20,7 +20,7 @@ Instead of running a dozen disparate standalone addons for small interface tweak
 ## Included Modules
 
 ### 1. ISIIbus Equipped (`Modules/ISI.lua`)
-An enhanced on-screen equipment and set tracker HUD (adapted with permission from raid leader *Isiimode* and heavily optimized).
+An enhanced on-screen equipment and set tracker HUD (adapted with permission from *Isiimode* and heavily optimized).
 * **Equipped Set Bonuses**: Displays currently equipped set piece counts (e.g., `5/5`, `2/2` Monster Sets, `1/1` Mythic items). Complete sets glow green; incomplete sets display red.
 * **Bar Location Tags**: Indicates where sets are slotted:
   * `(b)` &mdash; Body armor
