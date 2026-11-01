@@ -2,7 +2,7 @@
 
 [![Addon Version](https://img.shields.io/badge/Version-1.5.0-blue.svg)](https://www.esoui.com/downloads/info4450-KwibusRandomThingsKRT.html)
 [![ESO API](https://img.shields.io/badge/API-101050%20101051-green.svg)](https://www.esoui.com/downloads/info4450-KwibusRandomThingsKRT.html)
-[![ESOUI Download](https://img.shields.io/badge/ESOUI-orange.svg)](https://www.esoui.com/downloads/info4450-KwibusRandomThingsKRT.html)
+[![ESOUI Download](https://img.shields.io/badge/ESOUI-KRT-orange.svg)](https://www.esoui.com/downloads/info4450-KwibusRandomThingsKRT.html)
 
 **Kwibus Random Things (KRT)** is a modular, high-performance miscellaneous utility and raid assistance addon for *The Elder Scrolls Online* (ESO).
 
