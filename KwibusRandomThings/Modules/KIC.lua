@@ -1,13 +1,7 @@
 KwibusRandomThings = KwibusRandomThings or {}
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
-local WM = WINDOW_MANAGER
 local ADDON_NAME = KRT.name
-
-local EnsureTable = KRT.EnsureTable
-local IsNonEmptyString = KRT.IsNonEmptyString
-local DebounceNextFrame = KRT.DebounceNextFrame
-local RGBToHex = KRT.RGBToHex
 
 local DEFAULTS = { kic = {
     enabled = true,
@@ -24,7 +18,9 @@ local DEFAULTS = { kic = {
 
 KRT.KIC = {
     id = "kic",
-    defaults = DEFAULTS.kic, hideTimerId = nil }
+    defaults = DEFAULTS.kic,
+    hideTimerId = nil,
+}
 
 local FALLBACK_COLOR = { r = 1, g = 1, b = 1 } -- PERFORMANCE FIX
 
@@ -73,7 +69,6 @@ function KRT.KIC:ShowMessage(text, color, durationMs)
     local c = color or FALLBACK_COLOR
     KwibusInCombat_UIText:SetColor(c.r or 1, c.g or 1, c.b or 1, 1)
 
-    -- self:ApplyFontScale() -- OPTIMIZED: Font scale is static, no need to re-apply on every combat change
     KwibusInCombat_UI:SetHidden(false)
 
     self.hideTimerId = zo_callLater(function()
@@ -130,13 +125,6 @@ function KRT.KIC:Initialize()
         self:ShowMessage("move me", { r = 1, g = 1, b = 1 }, 9999999)
     end
 
-    EM:RegisterForEvent(ADDON_NAME .. "_KIC_Activated", EVENT_PLAYER_ACTIVATED, function()
-        local sv2 = self:SV()
-        if not (sv2 and sv2.enabled) then return end
-        self:ApplyAnchor()
-        self:ApplyFontScale()
-    end)
-
     EM:RegisterForEvent(ADDON_NAME .. "_KIC_Combat", EVENT_PLAYER_COMBAT_STATE, function(_, inCombat)
         self:OnCombatStateChanged(inCombat)
     end)
@@ -173,7 +161,7 @@ function KRT.KIC:GetLAMSubmenu()
                     KRT.KIC:EnableDragging(v)
                     KRT.KIC:ApplyAnchor()
                     if v then
-                        KRT.KIC.hideTimerId = nil
+                        KIC_CancelHide()
                         KRT.KIC:ShowMessage("move me", { r = 1, g = 1, b = 1 }, 9999999)
                     else
                         if KwibusInCombat_UI then KwibusInCombat_UI:SetHidden(true) end

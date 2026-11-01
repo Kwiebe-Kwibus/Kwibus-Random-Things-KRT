@@ -1,12 +1,6 @@
 local KRT = KwibusRandomThings
 local EM = EVENT_MANAGER
-local WM = WINDOW_MANAGER
 local ADDON_NAME = KRT.name
-
-local EnsureTable = KRT.EnsureTable
-local IsNonEmptyString = KRT.IsNonEmptyString
-local DebounceNextFrame = KRT.DebounceNextFrame
-local RGBToHex = KRT.RGBToHex
 
 -- Module-local defaults wrapper
 local DEFAULTS = { kls = {

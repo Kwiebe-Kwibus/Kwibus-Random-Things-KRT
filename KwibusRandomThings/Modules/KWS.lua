@@ -9,10 +9,12 @@ local DEFAULTS = {
         enabled = true,
         enableAutoLead = true,
         enableChat = true,
+        useCCAGroupAutoInvite = true, -- Auto-accept group invites received after a kick or disband (CCA style)
         debug = false,
         kickingPerson = "",
         actualLead = "",
         kickDelay = 2,
+        reinviteDelay = 1, -- Seconds to wait after kicked players leave before sending re-invites
         returnDelay = 2,
         kalPhase = 0, -- 0 idle, 1 waiting for drop, 2 waiting for rebuild/return
         knownAccounts = {},
@@ -95,6 +97,12 @@ local function MigrateSV()
             sv.lastProfile = old.lastProfile
         end
     end
+    if sv.useCCAGroupAutoInvite == nil then
+        sv.useCCAGroupAutoInvite = true
+    end
+    if sv.reinviteDelay == nil then
+        sv.reinviteDelay = 1
+    end
     if sv.knownAccounts == nil then
         sv.knownAccounts = {}
     end
@@ -133,6 +141,12 @@ local kalState = {
     lastSizeChangeMs = 0,
     polling = false,
 }
+
+-- CCA-style group reform & auto-invite tracking state
+local AUTO_INVITE_ALLOWANCE_MS = 10000 -- Base allowance window for receiving reinvites after a kick/disband
+local disbandLeader = ""
+local disbandTime = 0
+local kickTime = 0
 
 local function Lower(value)
     return string.lower(value or "")
@@ -1133,6 +1147,8 @@ local function SortGroupMembers(a, b)
     return (a.displayName or "") < (b.displayName or "")
 end
 
+local _refreshMembers = {}
+
 function KRT.KWS:RefreshRows()
     if not self.ui then
         self:CreateUI()
@@ -1172,7 +1188,7 @@ function KRT.KWS:RefreshRows()
     local isGrouped = IsUnitGrouped("player")
     local groupSize = isGrouped and GetGroupSize() or 1
     local myZoneId = GetUnitZoneIndex("player")
-    local members = {}
+    local members = _refreshMembers
 
     for i = 1, groupSize do
         local tag = isGrouped and GetGroupUnitTagByIndex(i) or "player"
@@ -1191,15 +1207,22 @@ function KRT.KWS:RefreshRows()
 
         local isSelf = AreUnitsEqual(tag, "player") or (displayName and string.lower(displayName) == self.myDisplayNameLower)
 
-        table.insert(members, {
-            tag = tag,
-            displayName = displayName,
-            role = role,
-            roleWeight = roleWeight,
-            inMyZone = (unitZoneId == myZoneId),
-            isOnline = IsUnitOnline(tag),
-            isSelf = isSelf,
-        })
+        local member = members[i]
+        if not member then
+            member = {}
+            members[i] = member
+        end
+        member.tag = tag
+        member.displayName = displayName
+        member.role = role
+        member.roleWeight = roleWeight
+        member.inMyZone = (unitZoneId == myZoneId)
+        member.isOnline = IsUnitOnline(tag)
+        member.isSelf = isSelf
+    end
+
+    for j = groupSize + 1, #members do
+        members[j] = nil
     end
 
     table.sort(members, SortGroupMembers)
@@ -1357,12 +1380,13 @@ function KRT.KWS:KickAndReinvite()
             zo_removeCallLater(self.inviteTimeoutTimer)
         end
 
+        local timeoutMs = ((sv.reinviteDelay or 1) + 2) * 1000
         self.inviteTimeoutTimer = zo_callLater(function()
             if self.pendingKicksCount > 0 then
                 d("[Kwibus Spaulder] Kick confirmation timeout reached. Forcing invites.")
                 self:ExecuteInvites()
             end
-        end, 3000)
+        end, timeoutMs)
     else
         self.isProcessing = false
         self:RefreshRows()
@@ -1426,7 +1450,6 @@ function KRT.KWS:Initialize()
         self:ToggleFragment()
         if self.ui and not self.ui:IsHidden() then
             self:RefreshRows()
-            self:UpdateProfileDropdown()
         end
         if SV().enableAutoLead then
             CheckGroupState()
@@ -1435,6 +1458,18 @@ function KRT.KWS:Initialize()
 
     local function OnGroupMemberLeft(eventCode, memberCharacterName, reason, isLocalPlayer, isLeader, memberDisplayName, actionRequiredVote)
         if not SV().enabled then return end
+
+        -- Track kick and disband events for auto-accepting subsequent group invites
+        local sv = SV()
+        if sv.useCCAGroupAutoInvite == nil or sv.useCCAGroupAutoInvite then
+            if not isLocalPlayer and isLeader and reason == GROUP_LEAVE_REASON_DISBAND then
+                disbandLeader = memberDisplayName or ""
+                disbandTime = Now()
+            elseif isLocalPlayer and reason == GROUP_LEAVE_REASON_KICKED then
+                kickTime = Now()
+            end
+        end
+
         OnGroupUpdate()
 
         if self.pendingKicksCount > 0 then
@@ -1446,26 +1481,59 @@ function KRT.KWS:Initialize()
             end
 
             if self.pendingKicksCount <= 0 then
+                local reinviteDelayMs = (sv.reinviteDelay or 1) * 1000
                 zo_callLater(function()
                     self:ExecuteInvites()
-                end, 2000)
+                end, reinviteDelayMs)
             end
+        end
+    end
+
+    local autoAcceptTimer = nil
+
+    -- Auto-accept reinvites after a kick or disband (inspired by Code's Combat Alerts)
+    local function OnGroupInviteReceived(eventCode, inviterCharacterName, inviterDisplayName)
+        local sv = SV()
+        if not (sv and sv.enabled and (sv.useCCAGroupAutoInvite == nil or sv.useCCAGroupAutoInvite)) then return end
+
+        local now = Now()
+        -- Dynamically scale allowance window based on configured delays to accommodate longer reinvite timers
+        local configuredDelay = math.max(sv.reinviteDelay or 1, sv.kickDelay or 2)
+        local dynamicAllowance = math.max(15000, (configuredDelay + 10) * 1000)
+
+        -- Check if invite matches a recent disband by the leader or a recent kick
+        local isDisbandInvite = (inviterDisplayName and inviterDisplayName ~= "" and disbandLeader ~= "" and Lower(inviterDisplayName) == Lower(disbandLeader) and (now - disbandTime < dynamicAllowance))
+        local isKickInvite = (kickTime > 0 and (now - kickTime < dynamicAllowance))
+
+        if isDisbandInvite or isKickInvite then
+            kickTime = 0
+            disbandTime = 0
+            disbandLeader = ""
+            local sender = (inviterDisplayName and inviterDisplayName ~= "") and inviterDisplayName or (inviterCharacterName or "leader")
+
+            if autoAcceptTimer then
+                zo_removeCallLater(autoAcceptTimer)
+                autoAcceptTimer = nil
+            end
+
+            -- Delay acceptance by 1 second after invite arrival for clean client state transitions
+            autoAcceptTimer = zo_callLater(function()
+                autoAcceptTimer = nil
+                AcceptGroupInvite()
+                Notice("Auto-accepted group invite from " .. tostring(sender) .. ".")
+            end, 1000)
         end
     end
 
     EM:RegisterForEvent(ADDON_NAME .. "_KWSJoin", EVENT_GROUP_MEMBER_JOINED, OnGroupUpdate)
     EM:RegisterForEvent(ADDON_NAME .. "_KWSLeft", EVENT_GROUP_MEMBER_LEFT, OnGroupMemberLeft)
+    EM:RegisterForEvent(ADDON_NAME .. "_KWSInvite", EVENT_GROUP_INVITE_RECEIVED, OnGroupInviteReceived)
     EM:RegisterForEvent(ADDON_NAME .. "_KWSRole", EVENT_GROUP_MEMBER_ROLE_CHANGED, OnGroupUpdate)
     EM:RegisterForEvent(ADDON_NAME .. "_KWSLeader", EVENT_LEADER_UPDATE, OnGroupUpdate)
 
     EM:RegisterForEvent(ADDON_NAME .. "_KWS_Deactivated", EVENT_PLAYER_DEACTIVATED, OnPlayerDeactivated)
     EM:RegisterForEvent(ADDON_NAME .. "_KWS_Activated", EVENT_PLAYER_ACTIVATED, OnPlayerActivated)
     EM:RegisterForEvent(ADDON_NAME .. "_KWS_VetChanged", EVENT_VETERAN_DIFFICULTY_CHANGED, OnDifficultyChanged)
-
-    self.ui:SetHandler("OnEffectivelyShown", function()
-        self:RefreshRows()
-        self:UpdateProfileDropdown()
-    end)
 
     CALLBACK_MANAGER:RegisterCallback("LAM-PanelOpened", function(panel)
         if panel and panel.GetName and panel:GetName() == ADDON_NAME .. "_Panel" then
@@ -1545,6 +1613,36 @@ function KRT.KWS:GetLAMSubmenu()
                 end,
                 setFunc = function(value)
                     SV().enableChat = value
+                end,
+                width = "full",
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "checkbox",
+                name = "Use CCA Group Auto Invite",
+                tooltip = "Automatically accept group invites received shortly after being kicked or after the group is disbanded (similar to Combat Alerts).",
+                getFunc = function()
+                    local sv = SV()
+                    if sv.useCCAGroupAutoInvite == nil then return true else return sv.useCCAGroupAutoInvite end
+                end,
+                setFunc = function(value)
+                    SV().useCCAGroupAutoInvite = value
+                end,
+                width = "full",
+                disabled = function() return not SV().enabled end,
+            },
+            {
+                type = "slider",
+                name = "Delay: Re-invite Players",
+                tooltip = "Seconds to wait after kicked players leave before sending the re-invites. Auto-accept dynamically scales with this setting and accepts 1 second after invites go out.",
+                min = 1,
+                max = 10,
+                step = 1,
+                getFunc = function()
+                    return SV().reinviteDelay or 1
+                end,
+                setFunc = function(value)
+                    SV().reinviteDelay = value
                 end,
                 width = "full",
                 disabled = function() return not SV().enabled end,

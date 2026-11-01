@@ -5,7 +5,6 @@ local WM = WINDOW_MANAGER
 local ADDON_NAME = KRT.name
 
 local IsNonEmptyString = KRT.IsNonEmptyString
-local DebounceNextFrame = KRT.DebounceNextFrame
 
 local DEFAULTS = { kow = {
     enabled = true,
@@ -142,11 +141,9 @@ function KRT.KOW:Initialize()
         self:UpdateDisplay()
     end)
 
-    EM:RegisterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, function(_, changeType, _, _, unitTag, _, _, _, _, _, _, _, _, _, _, abilityId)
+    EM:RegisterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, function(_, changeType)
         local sv2 = self:SV()
         if not (sv2 and sv2.enabled) then return end
-        if unitTag ~= "player" then return end
-        if abilityId ~= self.TARGET_BUFF_ID then return end
         if changeType == EFFECT_RESULT_GAINED then
             self:UpdateDisplay(true)
         elseif changeType == EFFECT_RESULT_FADED then
@@ -156,12 +153,13 @@ function KRT.KOW:Initialize()
         end
     end)
     EM:AddFilterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, REGISTER_FILTER_UNIT_TAG, "player")
+    EM:AddFilterForEvent(ADDON_NAME .. "_KOW_Effect", EVENT_EFFECT_CHANGED, REGISTER_FILTER_ABILITY_ID, self.TARGET_BUFF_ID)
 
     self:UpdateDisplay()
 end
 
 local function SV()
-    return KRT.sv
+    return KRT.KOW:SV()
 end
 
 function KRT.KOW:GetLAMSubmenu()
@@ -172,9 +170,9 @@ function KRT.KOW:GetLAMSubmenu()
             {
                 type = "checkbox",
                 name = "Enable Module",
-                getFunc = function() return SV().kow.enabled end,
+                getFunc = function() return SV().enabled end,
                 setFunc = function(v)
-                    SV().kow.enabled = v
+                    SV().enabled = v
                     if not v then
                         KRT.KOW:EnableDragging(false)
                         if KRT.KOW.ui then KRT.KOW.ui:SetHidden(true) end
@@ -188,47 +186,47 @@ function KRT.KOW:GetLAMSubmenu()
                 type = "checkbox",
                 name = "Enable Repositioning (Drag)",
                 tooltip = "Allows you to drag and reposition the reminder overlay.",
-                getFunc = function() return SV().kow.enableReposition end,
+                getFunc = function() return SV().enableReposition end,
                 setFunc = function(v)
-                    SV().kow.enableReposition = v
+                    SV().enableReposition = v
                     KRT.KOW:EnableDragging(v)
                     KRT.KOW:ApplyAnchor()
                 end,
                 width = "full",
-                disabled = function() return not SV().kow.enabled end,
+                disabled = function() return not SV().enabled end,
             },
             {
                 type = "button",
                 name = "Reset Horizontal Position",
                 func = function()
-                    SV().kow.offsetX = 0
+                    SV().offsetX = 0
                     KRT.KOW:ApplyAnchor()
                 end,
                 width = "half",
-                disabled = function() return not SV().kow.enabled or not SV().kow.enableReposition end,
+                disabled = function() return not SV().enabled or not SV().enableReposition end,
             },
             {
                 type = "button",
                 name = "Reset Vertical Position",
                 func = function()
-                    SV().kow.offsetY = DEFAULTS.kow.offsetY
+                    SV().offsetY = DEFAULTS.kow.offsetY
                     KRT.KOW:ApplyAnchor()
                 end,
                 width = "half",
-                disabled = function() return not SV().kow.enabled or not SV().kow.enableReposition end,
+                disabled = function() return not SV().enabled or not SV().enableReposition end,
             },
             {
                 type = "editbox",
                 name = "Reminder Text",
                 isMultiline = false,
-                getFunc = function() return SV().kow.text end,
+                getFunc = function() return SV().text end,
                 setFunc = function(v)
-                    SV().kow.text = IsNonEmptyString(v) and v or DEFAULTS.kow.text
+                    SV().text = IsNonEmptyString(v) and v or DEFAULTS.kow.text
                     KRT.KOW:UpdateTextStyle()
                     KRT.KOW:UpdateDisplay()
                 end,
                 width = "full",
-                disabled = function() return not SV().kow.enabled end,
+                disabled = function() return not SV().enabled end,
             },
             {
                 type = "slider",
@@ -236,26 +234,26 @@ function KRT.KOW:GetLAMSubmenu()
                 min = 0.5,
                 max = 3.0,
                 step = 0.1,
-                getFunc = function() return SV().kow.fontScale end,
+                getFunc = function() return SV().fontScale end,
                 setFunc = function(v)
-                    SV().kow.fontScale = v
+                    SV().fontScale = v
                     KRT.KOW:UpdateTextStyle()
                 end,
                 width = "full",
-                disabled = function() return not SV().kow.enabled end,
+                disabled = function() return not SV().enabled end,
             },
             {
                 type = "dropdown",
                 name = "Text Side",
                 choices = { "Left", "Center", "Right" },
                 choicesValues = { "left", "center", "right" },
-                getFunc = function() return SV().kow.textSide end,
+                getFunc = function() return SV().textSide end,
                 setFunc = function(v)
-                    SV().kow.textSide = v
+                    SV().textSide = v
                     KRT.KOW:UpdateTextStyle()
                 end,
                 width = "full",
-                disabled = function() return not SV().kow.enabled end,
+                disabled = function() return not SV().enabled end,
             },
         },
     }

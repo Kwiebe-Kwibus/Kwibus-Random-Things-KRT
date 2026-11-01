@@ -1,5 +1,5 @@
 local ADDON_NAME = "KwibusRandomThings"
-local ADDON_VERSION = "1.4.6"
+local ADDON_VERSION = "1.5.0"
 
 local EM = EVENT_MANAGER
 
@@ -40,19 +40,20 @@ function KRT.DeepMergeDefaults(target, source)
     end
 end
 
--- PERFORMANCE FIX: Static queue executor prevents inline closure allocations and batches debounces
+-- PERFORMANCE FIX: Static dual-queue executor prevents inline closure allocations, table allocations, and batches debounces
 local _debounceQueue = {}
+local _processingQueue = {}
 local _isDebounceScheduled = false
 
 local function ProcessDebounceQueue()
     _isDebounceScheduled = false
-    local queue = _debounceQueue
-    _debounceQueue = {}
-    for key, fn in pairs(queue) do
+    _debounceQueue, _processingQueue = _processingQueue, _debounceQueue
+    for key, fn in pairs(_processingQueue) do
         if type(fn) == "function" then
             fn()
         end
     end
+    ZO_ClearTable(_processingQueue)
 end
 
 function KRT.DebounceNextFrame(key, fn)
@@ -151,6 +152,7 @@ KRT.TRIAL_ZONES = {
     [1344] = true, -- Dreadsail Reef
     [1420] = true, -- Sanity's Edge
     [1478] = true, -- Lucent Citadel
+    [1548] = true, -- Ossein Cage
 }
 
 KRT.ARENA_ZONES = {
@@ -458,8 +460,9 @@ local function OnAddOnLoaded(_, addonName)
         if id and type(defaults) == "table" then
             if type(KRT.sv[id]) ~= "table" then
                 KRT.sv[id] = ZO_DeepTableCopy(defaults)
+            else
+                KRT.DeepMergeDefaults(KRT.sv[id], defaults)
             end
-            KRT.DeepMergeDefaults(KRT.sv[id], defaults)
         end
 
         if mod.Initialize then

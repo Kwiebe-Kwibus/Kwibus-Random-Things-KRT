@@ -10,8 +10,11 @@ KRT.GUID = {
     id = "guid",
     defaults = DEFAULTS.guid,
 }
+function KRT.GUID:SV()
+    return KRT.GetModuleSV(self.id, self.defaults)
+end
 local function SV()
-    return KRT.GetModuleSV("guid", DEFAULTS.guid)
+    return KRT.GUID:SV()
 end
 
 -- Helper to remove the "@" at the start of a string
@@ -46,18 +49,11 @@ local function refreshEmperorPostHook(selfControl, control, data)
     if not ZO_ShouldPreferUserId() then return false end
     
     if DoesCampaignHaveEmperor(selfControl.campaignId) then
-        local alliance, characterName, displayName = GetCampaignEmperorInfo(selfControl.campaignId)
+        local _, _, displayName = GetCampaignEmperorInfo(selfControl.campaignId)
         local emperorName = selfControl.emperorName
-        if not emperorName then return false end
-        
-        emperorName:SetText(StripAt(displayName))
-        emperorName:SetMouseEnabled(true)
-        emperorName:SetHandler("OnMouseEnter", function(empControl)
-            ZO_Tooltips_ShowTextTooltip(empControl, TOP, characterName)
-        end)
-        emperorName:SetHandler("OnMouseExit", function(empControl)
-            ZO_Tooltips_HideTextTooltip()
-        end)
+        if emperorName then
+            emperorName:SetText(StripAt(displayName))
+        end
     end
     return false
 end

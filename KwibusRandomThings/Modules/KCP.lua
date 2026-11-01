@@ -4,10 +4,7 @@ local EM = EVENT_MANAGER
 local WM = WINDOW_MANAGER
 local ADDON_NAME = KRT.name
 
-local EnsureTable = KRT.EnsureTable
 local IsNonEmptyString = KRT.IsNonEmptyString
-local DebounceNextFrame = KRT.DebounceNextFrame
-local RGBToHex = KRT.RGBToHex
 
 local DEFAULTS = { kcp = {
     enabled = true,
@@ -19,8 +16,8 @@ local DEFAULTS = { kcp = {
   } }
 
 KRT.KCP = {
-    id = "kcp",
-    defaults = DEFAULTS.kcp,
+  id = "kcp",
+  defaults = DEFAULTS.kcp,
   SKILL_ID = 183267,
   DEBUFF_ID = 145975,
 
@@ -28,7 +25,6 @@ KRT.KCP = {
   lbl = nil,
 
   _slotted = false,
-  _slottedAtMs = 0,
   _hasDebuff = false,
   _hasDebuffAtMs = 0,
 }
@@ -98,13 +94,8 @@ function KRT.KCP:_ComputeIsSkillSlotted()
   return false
 end
 
-function KRT.KCP:IsSkillSlottedCached(maxAgeMs)
-  local nowMs = GetFrameTimeMilliseconds()
-  if (nowMs - (self._slottedAtMs or 0)) > (maxAgeMs or 1000) then
-    self._slotted = self:_ComputeIsSkillSlotted()
-    self._slottedAtMs = nowMs
-  end
-  return self._slotted
+function KRT.KCP:UpdateSlottedState()
+  self._slotted = self:_ComputeIsSkillSlotted()
 end
 
 function KRT.KCP:_ComputeHasDebuff()
@@ -138,16 +129,19 @@ function KRT.KCP:OnCombatUpdate()
     return
   end
 
+  if not self._slotted then
+    if self.ui then self.ui:SetHidden(true) end
+    return
+  end
+
   if not self.ui then return end
 
   if IsUnitInCombat("player")
       and DoesUnitExist("reticleover")
       and IsUnitAttackable("reticleover")
       and not IsUnitDead("reticleover") then
-    if self:IsSkillSlottedCached(1000) then
-      self.ui:SetHidden(self:HasDebuffCached(120))
-      return
-    end
+    self.ui:SetHidden(self:HasDebuffCached(120))
+    return
   end
 
   self.ui:SetHidden(true)
@@ -161,6 +155,7 @@ function KRT.KCP:Initialize()
   self:ApplyAnchor()
   self:UpdateTextAndScale()
   self:EnableDragging(sv.enableReposition)
+  self:UpdateSlottedState()
 
   EM:RegisterForEvent(ADDON_NAME .. "_KCP_Combat", EVENT_PLAYER_COMBAT_STATE, function()
     local sv2 = self:SV()
@@ -173,7 +168,6 @@ function KRT.KCP:Initialize()
     if not (sv2 and sv2.enabled) then return end
     if not (IsUnitInCombat("player") or sv2.enableReposition) then return end
     self._hasDebuffAtMs = 0
-    self._slottedAtMs = 0
     self:OnCombatUpdate()
   end)
 
@@ -185,9 +179,17 @@ function KRT.KCP:Initialize()
     self:OnCombatUpdate()
   end)
   EM:AddFilterForEvent(ADDON_NAME .. "_KCP_Effect", EVENT_EFFECT_CHANGED, REGISTER_FILTER_UNIT_TAG, "reticleover")
+  EM:AddFilterForEvent(ADDON_NAME .. "_KCP_Effect", EVENT_EFFECT_CHANGED, REGISTER_FILTER_ABILITY_ID, self.DEBUFF_ID)
+
+  EM:RegisterForEvent(ADDON_NAME .. "_KCP_SlotsAll", EVENT_ACTION_SLOTS_ALL_HOTBARS_UPDATED, function()
+    self:UpdateSlottedState()
+  end)
+  EM:RegisterForEvent(ADDON_NAME .. "_KCP_Slot", EVENT_ACTION_SLOT_UPDATED, function()
+    self:UpdateSlottedState()
+  end)
 end
 
-local function SV() return KRT.sv end
+local function SV() return KRT.KCP:SV() end
 
 function KRT.KCP:GetLAMSubmenu()
     return {
@@ -197,9 +199,9 @@ function KRT.KCP:GetLAMSubmenu()
         {
           type = "checkbox",
           name = "Enable Module",
-          getFunc = function() return SV().kcp.enabled end,
+          getFunc = function() return SV().enabled end,
           setFunc = function(v)
-            SV().kcp.enabled = v
+            SV().enabled = v
             if not v then
               KRT.KCP:EnableDragging(false)
               if KRT.KCP.ui then KRT.KCP.ui:SetHidden(true) end
@@ -213,40 +215,40 @@ function KRT.KCP:GetLAMSubmenu()
           type = "checkbox",
           name = "Enable Repositioning (Drag)",
           tooltip = "Allows you to drag and reposition the reminder overlay.",
-          getFunc = function() return SV().kcp.enableReposition end,
+          getFunc = function() return SV().enableReposition end,
           setFunc = function(v)
-            SV().kcp.enableReposition = v
+            SV().enableReposition = v
             KRT.KCP:EnableDragging(v)
             KRT.KCP:ApplyAnchor()
           end,
           width = "full",
-          disabled = function() return not SV().kcp.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "button",
           name = "Reset Horizontal Position",
-          func = function() SV().kcp.offsetX = 0; KRT.KCP:ApplyAnchor() end,
-          disabled = function() return not SV().kcp.enabled or not SV().kcp.enableReposition end,
+          func = function() SV().offsetX = 0; KRT.KCP:ApplyAnchor() end,
+          disabled = function() return not SV().enabled or not SV().enableReposition end,
           width = "half",
         },
         {
           type = "button",
           name = "Reset Vertical Position",
-          func = function() SV().kcp.offsetY = DEFAULTS.kcp.offsetY; KRT.KCP:ApplyAnchor() end,
-          disabled = function() return not SV().kcp.enabled or not SV().kcp.enableReposition end,
+          func = function() SV().offsetY = DEFAULTS.kcp.offsetY; KRT.KCP:ApplyAnchor() end,
+          disabled = function() return not SV().enabled or not SV().enableReposition end,
           width = "half",
         },
         {
           type = "editbox",
           name = "Reminder Text",
           isMultiline = false,
-          getFunc = function() return SV().kcp.text end,
+          getFunc = function() return SV().text end,
           setFunc = function(v)
-            SV().kcp.text = IsNonEmptyString(v) and v or DEFAULTS.kcp.text
+            SV().text = IsNonEmptyString(v) and v or DEFAULTS.kcp.text
             KRT.KCP:UpdateTextAndScale()
           end,
           width = "full",
-          disabled = function() return not SV().kcp.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "slider",
@@ -254,14 +256,13 @@ function KRT.KCP:GetLAMSubmenu()
           min = 0.5,
           max = 3.0,
           step = 0.1,
-          getFunc = function() return SV().kcp.fontScale end,
-          setFunc = function(v) SV().kcp.fontScale = v; KRT.KCP:UpdateTextAndScale() end,
+          getFunc = function() return SV().fontScale end,
+          setFunc = function(v) SV().fontScale = v; KRT.KCP:UpdateTextAndScale() end,
           width = "full",
-          disabled = function() return not SV().kcp.enabled end,
+          disabled = function() return not SV().enabled end,
         },
       },
     }
 end
 
 KRT:RegisterModule(KRT.KCP)
-

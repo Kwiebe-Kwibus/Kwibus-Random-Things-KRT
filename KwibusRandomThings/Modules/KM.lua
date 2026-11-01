@@ -6,8 +6,6 @@ local ADDON_NAME = KRT.name
 
 local EnsureTable = KRT.EnsureTable
 local IsNonEmptyString = KRT.IsNonEmptyString
-local DebounceNextFrame = KRT.DebounceNextFrame
-local RGBToHex = KRT.RGBToHex
 
 local LSB = LibSkillBlocker
 local DEFAULTS = { km = {
@@ -35,14 +33,13 @@ KRT.KM = {
 
     lastArchdruidTime = 0,
     _lastArchdruidCount = nil,
-
-    _piecesCacheCount = 0,
-    _piecesCacheAtMs = 0,
+    _hasTwoPieces = false,
 
     warningWindow = nil,
     warningLabel = nil,
     registeredBlocks = {},
     _loopsRegistered = false,
+    _updateRegistered = false,
 }
 
 function KRT.KM:SV()
@@ -76,8 +73,8 @@ function KRT.KM:_ComputeArchdruidPieceCount()
     for _, slot in ipairs(self.SLOTS) do
         local link = GetItemLink(BAG_WORN, slot)
         if IsNonEmptyString(link) then
-            local hasSet, setName = GetItemLinkSetInfo(link, false)
-            if hasSet and IsArchdruidSetName(setName) then
+            local hasSet, setName, _, _, _, setId = GetItemLinkSetInfo(link, false)
+            if hasSet and (setId == 666 or IsArchdruidSetName(setName)) then
                 count = count + 1
             end
         end
@@ -90,17 +87,13 @@ function KRT.KM:_ComputeArchdruidPieceCount()
     return count
 end
 
-function KRT.KM:GetArchdruidPieceCountCached(maxAgeMs)
-    local nowMs = GetFrameTimeMilliseconds()
-    if (nowMs - (self._piecesCacheAtMs or 0)) > (maxAgeMs or 5000) then
-        self._piecesCacheCount = self:_ComputeArchdruidPieceCount()
-        self._piecesCacheAtMs = nowMs
-    end
-    return self._piecesCacheCount or 0
+function KRT.KM:UpdateEquippedPieces()
+    self._hasTwoPieces = (self:_ComputeArchdruidPieceCount() >= self.MIN_PIECES)
+    self:UpdateLoopState()
 end
 
 function KRT.KM:HasTwoPieces()
-    return self:GetArchdruidPieceCountCached(5000) >= self.MIN_PIECES
+    return self._hasTwoPieces == true
 end
 
 function KRT.KM:GetCooldownRemaining()
@@ -167,8 +160,6 @@ function KRT.KM:EnableDragging(enable)
 end
 
 function KRT.KM:OnCombatEvent(eventCode, result, isError, abilityName, abilityGraphic, abilityActionSlotType, sourceName, sourceType, targetName, targetType, hitValue, powerType, damageType, log, sourceUnitId, targetUnitId, abilityId)
-    if sourceType and sourceType ~= COMBAT_UNIT_TYPE_PLAYER then return end
-
     if self:IsOnCooldown() then
         self:Debug("Archdruid proc ignored: hard cooldown active (%.1fs remaining)", self:GetCooldownRemaining())
         return
@@ -185,7 +176,7 @@ end
 
 function KRT.KM:UpdateLoopState()
     local sv = self:SV()
-    local shouldRun = sv and sv.enabled and (sv.enableReposition or IsUnitInCombat("player"))
+    local shouldRun = sv and sv.enabled and (sv.enableReposition or (IsUnitInCombat("player") and self._hasTwoPieces))
     if shouldRun then
         if not self._updateRegistered then
             EM:RegisterForUpdate(ADDON_NAME .. "_KM_Update", 250, function()
@@ -211,10 +202,20 @@ function KRT.KM:ToggleBackgroundLoops(enable)
         end)
         EM:AddFilterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT, REGISTER_FILTER_ABILITY_ID, self.ARCHDRUID_ABILITY_ID)
         EM:AddFilterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT, REGISTER_FILTER_SOURCE_COMBAT_UNIT_TYPE, COMBAT_UNIT_TYPE_PLAYER)
+
+        EM:RegisterForEvent(ADDON_NAME .. "_KM_Inv", EVENT_INVENTORY_SINGLE_SLOT_UPDATE, function(_, bagId, slotId)
+            if slotId == EQUIP_SLOT_HEAD or slotId == EQUIP_SLOT_SHOULDERS then
+                self:UpdateEquippedPieces()
+            end
+        end)
+        EM:AddFilterForEvent(ADDON_NAME .. "_KM_Inv", EVENT_INVENTORY_SINGLE_SLOT_UPDATE, REGISTER_FILTER_BAG_ID, BAG_WORN)
+        EM:AddFilterForEvent(ADDON_NAME .. "_KM_Inv", EVENT_INVENTORY_SINGLE_SLOT_UPDATE, REGISTER_FILTER_INVENTORY_UPDATE_REASON, INVENTORY_UPDATE_REASON_DEFAULT)
+
         self._loopsRegistered = true
-        self:UpdateLoopState()
+        self:UpdateEquippedPieces()
     elseif not enable and self._loopsRegistered then
         EM:UnregisterForEvent(ADDON_NAME .. "_KM_Archdruid", EVENT_COMBAT_EVENT)
+        EM:UnregisterForEvent(ADDON_NAME .. "_KM_Inv", EVENT_INVENTORY_SINGLE_SLOT_UPDATE)
         self._loopsRegistered = false
         self:UpdateLoopState()
     end
@@ -258,7 +259,7 @@ function KRT.KM:_EnsureSkillBlockRegistered(abilityId)
     local idForClosure = abilityId
 
     LSB.RegisterSkillBlock(ADDON_NAME, idForClosure, function()
-        local sv = KRT.sv and KRT.sv.km
+        local sv = KRT.KM:SV()
         return sv and sv.enabled and sv.blockFlare and sv.blockedAbilityIds and sv.blockedAbilityIds[idForClosure]
     end, true)
 end
@@ -375,7 +376,7 @@ function KRT.KM:Initialize()
 end
 
 local function SV()
-    return KRT.sv
+    return KRT.KM:SV()
 end
 
 function KRT.KM:GetLAMSubmenu()
@@ -387,10 +388,10 @@ function KRT.KM:GetLAMSubmenu()
                 type = "checkbox",
                 name = "Enable Module",
                 getFunc = function()
-                    return SV().km.enabled
+                    return SV().enabled
                 end,
                 setFunc = function(v)
-                    SV().km.enabled = v
+                    SV().enabled = v
                     if not v then
                         KRT.KM:EnableDragging(false)
                         if KRT.KM.warningWindow then
@@ -410,27 +411,27 @@ function KRT.KM:GetLAMSubmenu()
                 name = "Enable Repositioning (Drag)",
                 tooltip = "Allows you to drag and reposition the warning overlay.",
                 getFunc = function()
-                    return SV().km.enableReposition
+                    return SV().enableReposition
                 end,
                 setFunc = function(v)
-                    SV().km.enableReposition = v
+                    SV().enableReposition = v
                     KRT.KM:EnableDragging(v)
                     KRT.KM:ApplyAnchor()
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
                 type = "button",
                 name = "Reset Horizontal Position",
                 func = function()
-                    SV().km.offsetX = 0
+                    SV().offsetX = 0
                     KRT.KM:ApplyAnchor()
                 end,
                 disabled = function()
-                    return not SV().km.enabled or not SV().km.enableReposition
+                    return not SV().enabled or not SV().enableReposition
                 end,
                 width = "half",
             },
@@ -438,11 +439,11 @@ function KRT.KM:GetLAMSubmenu()
                 type = "button",
                 name = "Reset Vertical Position",
                 func = function()
-                    SV().km.offsetY = DEFAULTS.km.offsetY
+                    SV().offsetY = DEFAULTS.km.offsetY
                     KRT.KM:ApplyAnchor()
                 end,
                 disabled = function()
-                    return not SV().km.enabled or not SV().km.enableReposition
+                    return not SV().enabled or not SV().enableReposition
                 end,
                 width = "half",
             },
@@ -451,15 +452,15 @@ function KRT.KM:GetLAMSubmenu()
                 name = "Warning Text",
                 isMultiline = false,
                 getFunc = function()
-                    return SV().km.text
+                    return SV().text
                 end,
                 setFunc = function(v)
-                    SV().km.text = IsNonEmptyString(v) and v or DEFAULTS.km.text
+                    SV().text = IsNonEmptyString(v) and v or DEFAULTS.km.text
                     KRT.KM:UpdateWarningText()
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
@@ -469,29 +470,29 @@ function KRT.KM:GetLAMSubmenu()
                 max = 3.0,
                 step = 0.1,
                 getFunc = function()
-                    return SV().km.labelScale
+                    return SV().labelScale
                 end,
                 setFunc = function(v)
-                    SV().km.labelScale = v
+                    SV().labelScale = v
                     KRT.KM:UpdateWarningText()
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
                 type = "checkbox",
                 name = "Show Static Label When Missing Proc",
                 getFunc = function()
-                    return SV().km.showStaticLabel
+                    return SV().showStaticLabel
                 end,
                 setFunc = function(v)
-                    SV().km.showStaticLabel = v
+                    SV().showStaticLabel = v
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
@@ -502,36 +503,36 @@ function KRT.KM:GetLAMSubmenu()
                 max = 60,
                 step = 1,
                 getFunc = function()
-                    local val = SV().km.timeout or DEFAULTS.km.timeout
+                    local val = SV().timeout or DEFAULTS.km.timeout
                     return math.max(KRT.KM.HARD_COOLDOWN, val)
                 end,
                 setFunc = function(v)
-                    SV().km.timeout = math.max(KRT.KM.HARD_COOLDOWN, v)
+                    SV().timeout = math.max(KRT.KM.HARD_COOLDOWN, v)
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
                 type = "checkbox",
                 name = "Block Configured Skills (LibSkillBlocker)",
                 getFunc = function()
-                    if not KRT.KM:HasLibSkillBlocker() and SV().km.blockFlare then
-                        SV().km.blockFlare = false
+                    if not KRT.KM:HasLibSkillBlocker() then
+                        return false
                     end
-                    return SV().km.blockFlare
+                    return SV().blockFlare
                 end,
                 setFunc = function(v)
                     if not KRT.KM:HasLibSkillBlocker() then
-                        SV().km.blockFlare = false
+                        SV().blockFlare = false
                         return
                     end
-                    SV().km.blockFlare = v
+                    SV().blockFlare = v
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled or not KRT.KM:HasLibSkillBlocker()
+                    return not SV().enabled or not KRT.KM:HasLibSkillBlocker()
                 end,
                 warning = function()
                     if not KRT.KM:HasLibSkillBlocker() then
@@ -561,7 +562,7 @@ function KRT.KM:GetLAMSubmenu()
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
@@ -576,21 +577,21 @@ function KRT.KM:GetLAMSubmenu()
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
             {
                 type = "checkbox",
                 name = "Enable Debug Logging",
                 getFunc = function()
-                    return SV().km.debugEnabled
+                    return SV().debugEnabled
                 end,
                 setFunc = function(v)
-                    SV().km.debugEnabled = v
+                    SV().debugEnabled = v
                 end,
                 width = "full",
                 disabled = function()
-                    return not SV().km.enabled
+                    return not SV().enabled
                 end,
             },
         },

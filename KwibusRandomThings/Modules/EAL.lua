@@ -26,14 +26,20 @@ KRT.EAL = {
     id = "eal",
     defaults = DEFAULTS.eal,
     indicator = nil,
+    label = nil,
+    bg = nil,
     indicatorFragment = nil,
     lastKnownLogState = nil,
     refreshCounter = 0,
     _updateLoopRegistered = false,
 }
 
+function KRT.EAL:SV()
+    return KRT.GetModuleSV(self.id, self.defaults)
+end
+
 local function SV() 
-    return KRT.GetModuleSV("eal", DEFAULTS.eal)
+    return KRT.EAL:SV()
 end
 
 local function PrintChatNotification(message)
@@ -174,7 +180,7 @@ function KRT.EAL:UpdateIndicatorState()
     end
 
     local isLogging = IsEncounterLogEnabled()
-    local label = w:GetNamedChild("Label")
+    local label = self.label
     if label then
         if isLogging then
             label:SetText("Logging")
@@ -185,7 +191,7 @@ function KRT.EAL:UpdateIndicatorState()
         end
     end
 
-    local bg = w:GetNamedChild("BG")
+    local bg = self.bg
     if bg then
         bg:SetHidden(not sv.indicatorUnlocked)
     end
@@ -211,18 +217,17 @@ end
 
 function KRT.EAL:EvaluateAndApplyLogState()
     if not SV().enabled then return end
-
     local shouldLog = ShouldLogHere()
-    if shouldLog then
-        if not IsEncounterLogEnabled() then self:SetEncounterLog(true) end
-    else
-        if IsEncounterLogEnabled() then self:SetEncounterLog(false) end
-    end
-    self:UpdateIndicatorState()
+    self:SetEncounterLog(shouldLog)
 end
 
-function KRT.EAL:Refresh()
+function KRT.EAL:Refresh(immediate)
     if not SV().enabled then return end
+    if immediate then
+        self:EvaluateAndApplyLogState()
+        return
+    end
+
     self.refreshCounter = (self.refreshCounter or 0) + 1
     local currentCounter = self.refreshCounter
     local delay = (SV().delaySeconds or 5) * 1000
@@ -290,6 +295,9 @@ function KRT.EAL:Initialize()
         d("[Kwibus Auto Log] ERROR: Could not link to XML frame. Settings will not work.")
         return 
     end
+
+    self.label = self.indicator:GetNamedChild("Label")
+    self.bg = self.indicator:GetNamedChild("BG")
 
     self:RestoreIndicatorPos()
     self.indicator:SetHandler("OnMoveStop", function() self:SaveIndicatorPos() end)
@@ -390,7 +398,7 @@ function KRT.EAL:GetLAMSubmenu()
                 name = "Log Normal Instances",
                 tooltip = "If enabled, logs Normal difficulty instances. If disabled, Normal Trials, Dungeons, and Arenas will never be logged.",
                 getFunc = function() return SV().logNormal end,
-                setFunc = function(v) SV().logNormal = v; self:Refresh() end,
+                setFunc = function(v) SV().logNormal = v; self:Refresh(true) end,
                 default = DEFAULTS.eal.logNormal,
                 width = "full",
                 disabled = function() return not SV().enabled end,
@@ -400,7 +408,7 @@ function KRT.EAL:GetLAMSubmenu()
                 type = "checkbox",
                 name = "Trials",
                 getFunc = function() return SV().logTrials end,
-                setFunc = function(v) SV().logTrials = v; self:Refresh() end,
+                setFunc = function(v) SV().logTrials = v; self:Refresh(true) end,
                 default = DEFAULTS.eal.logTrials,
                 width = "full",
                 disabled = function() return not SV().enabled end,
@@ -409,7 +417,7 @@ function KRT.EAL:GetLAMSubmenu()
                 type = "checkbox",
                 name = "Dungeons",
                 getFunc = function() return SV().logDungeons end,
-                setFunc = function(v) SV().logDungeons = v; self:Refresh() end,
+                setFunc = function(v) SV().logDungeons = v; self:Refresh(true) end,
                 default = DEFAULTS.eal.logDungeons,
                 width = "full",
                 disabled = function() return not SV().enabled end,
@@ -418,7 +426,7 @@ function KRT.EAL:GetLAMSubmenu()
                 type = "checkbox",
                 name = "Arenas",
                 getFunc = function() return SV().logArenas end,
-                setFunc = function(v) SV().logArenas = v; self:Refresh() end,
+                setFunc = function(v) SV().logArenas = v; self:Refresh(true) end,
                 default = DEFAULTS.eal.logArenas,
                 width = "full",
                 disabled = function() return not SV().enabled end,
@@ -427,7 +435,7 @@ function KRT.EAL:GetLAMSubmenu()
                 type = "checkbox",
                 name = "Houses",
                 getFunc = function() return SV().logHouses end,
-                setFunc = function(v) SV().logHouses = v; self:Refresh() end,
+                setFunc = function(v) SV().logHouses = v; self:Refresh(true) end,
                 default = DEFAULTS.eal.logHouses,
                 width = "full",
                 disabled = function() return not SV().enabled end,
@@ -436,7 +444,7 @@ function KRT.EAL:GetLAMSubmenu()
                 type = "checkbox",
                 name = "PvP (Cyrodiil/IC/BGs)",
                 getFunc = function() return SV().logPvP end,
-                setFunc = function(v) SV().logPvP = v; self:Refresh() end,
+                setFunc = function(v) SV().logPvP = v; self:Refresh(true) end,
                 default = DEFAULTS.eal.logPvP,
                 width = "full",
                 disabled = function() return not SV().enabled end,

@@ -4,9 +4,7 @@ local EM = EVENT_MANAGER
 local WM = WINDOW_MANAGER
 local ADDON_NAME = KRT.name
 
-local EnsureTable = KRT.EnsureTable
 local IsNonEmptyString = KRT.IsNonEmptyString
-local DebounceNextFrame = KRT.DebounceNextFrame
 local RGBToHex = KRT.RGBToHex
 
 -- Module-local defaults wrapper
@@ -23,8 +21,8 @@ local DEFAULTS = { kwr = {
   } }
 
 KRT.KWR = {
-    id = "kwr",
-    defaults = DEFAULTS.kwr,
+  id = "kwr",
+  defaults = DEFAULTS.kwr,
   DIFF_NORMAL = 1,
   DIFF_VETERAN = 2,
 
@@ -33,11 +31,9 @@ KRT.KWR = {
   trialDiff = 1,
 
   COOLDOWN_MS = 2000,
-  UPDATE_NAME = ADDON_NAME .. "_KWR_Cooldown",
+  cooldownTimerId = nil,
 
   pendingMsg = nil,
-  lastChangeMs = 0,
-  cooldownArmed = false,
 
   ui = { tlw = nil, label = nil, hideNonce = 0, lastMessage = nil, pad = 12 },
 }
@@ -82,11 +78,7 @@ function KRT.KWR:SizeTLWToText()
   if not sv then return end
 
   local scale = zo_clamp(tonumber(sv.textScale) or 1.0, 0.5, 2.0)
-  local w = (label:GetTextWidth() or 0) * scale + self.ui.pad * 2
-  local h = (label:GetTextHeight() or 0) * scale + self.ui.pad * 2
-
-  if w <= 2 or h <= 2 then DebounceNextFrame("KWR_Size", function() self:SizeTLWToText() end); return end
-  tlw:SetDimensions(math.max(w, 120), math.max(h, 40))
+  KRT.ResizeTextHitbox("KWR_Size", tlw, label, scale, 120, 40)
 end
 
 function KRT.KWR:EnsureOverlay()
@@ -137,13 +129,13 @@ function KRT.KWR:ShowBigMovable(textNoOuterColor)
   end
 
   self:EnsureOverlay()
-  self:ApplyTextScale()
+  local scale = zo_clamp(tonumber(sv.textScale) or 1.0, 0.5, 2.0)
+  self.ui.label:SetScale(scale)
 
   local c = sv.color or DEFAULTS.kwr.color
   self.ui.label:SetText(RGBToHex(c.r, c.g, c.b) .. textNoOuterColor .. "|r")
 
-  self:SizeTLWToText()
-  DebounceNextFrame("KWR_SizeAfterText", function() self:SizeTLWToText() end)
+  KRT.ResizeTextHitbox("KWR_Size", self.ui.tlw, self.ui.label, scale, 120, 40)
 
   self.ui.tlw:SetHidden(false)
 
@@ -179,21 +171,18 @@ end
 
 function KRT.KWR:ArmCooldown(messageNoOuterColor)
   self.pendingMsg = messageNoOuterColor
-  self.lastChangeMs = GetFrameTimeMilliseconds()
-  if self.cooldownArmed then return end
-  self.cooldownArmed = true
-
-  EM:RegisterForUpdate(self.UPDATE_NAME, 100, function()
-    local now = GetFrameTimeMilliseconds()
-    if (now - self.lastChangeMs) >= self.COOLDOWN_MS then
-      EM:UnregisterForUpdate(self.UPDATE_NAME)
-      self.cooldownArmed = false
-      if self.pendingMsg then
-        self:ShowNotification(self.pendingMsg)
-        self.pendingMsg = nil
-      end
+  if self.cooldownTimerId then
+    zo_removeCallLater(self.cooldownTimerId)
+    self.cooldownTimerId = nil
+  end
+  self.cooldownTimerId = zo_callLater(function()
+    self.cooldownTimerId = nil
+    if self.pendingMsg then
+      local msg = self.pendingMsg
+      self.pendingMsg = nil
+      self:ShowNotification(msg)
     end
-  end)
+  end, self.COOLDOWN_MS)
 end
 
 function KRT.KWR:QueueResetMessage(newDiff)
@@ -201,11 +190,11 @@ function KRT.KWR:QueueResetMessage(newDiff)
 end
 
 function KRT.KWR:CancelPending()
-  if self.cooldownArmed then
-    EM:UnregisterForUpdate(self.UPDATE_NAME)
-    self.cooldownArmed = false
-    self.pendingMsg = nil
+  if self.cooldownTimerId then
+    zo_removeCallLater(self.cooldownTimerId)
+    self.cooldownTimerId = nil
   end
+  self.pendingMsg = nil
 end
 
 function KRT.KWR:UpdateDifficulty(newDiff)
@@ -222,9 +211,7 @@ end
 
 function KRT.KWR:OnPlayerActivated()
   self:SeedDifficultyFromGame()
-  self.initialized = true
   self.deactivated = false
-
   self:CancelPending()
 
   local sv = self:SV()
@@ -233,9 +220,12 @@ function KRT.KWR:OnPlayerActivated()
     return
   end
 
-  self:EnsureOverlay()
-  self:ApplyTextScale()
-  self:ApplyOverlayPosition()
+  if not self.initialized then
+    self:EnsureOverlay()
+    self:ApplyTextScale()
+    self:ApplyOverlayPosition()
+    self.initialized = true
+  end
 
   if sv.showCSA and sv.keepVisible then
     self:ShowBigMovable(self.ui.lastMessage or "Reset notification will appear here")
@@ -251,6 +241,7 @@ function KRT.KWR:Initialize()
   self:EnsureOverlay()
   self:ApplyTextScale()
   self:ApplyOverlayPosition()
+  self.initialized = true
 
   EM:RegisterForEvent(ADDON_NAME .. "_KWR_Deactivated", EVENT_PLAYER_DEACTIVATED, function() self:OnDeactivated() end)
 
@@ -277,7 +268,7 @@ end
 
 -- =========================================================
 
-local function SV() return KRT.sv end
+local function SV() return KRT.KWR:SV() end
 
 function KRT.KWR:GetLAMSubmenu()
     return {
@@ -287,9 +278,9 @@ function KRT.KWR:GetLAMSubmenu()
         {
           type = "checkbox",
           name = "Enable Module",
-          getFunc = function() return SV().kwr.enabled end,
+          getFunc = function() return SV().enabled end,
           setFunc = function(v)
-            SV().kwr.enabled = v
+            SV().enabled = v
             if not v then
               KRT.KWR:CancelPending()
               KRT.KWR:HideBigNow()
@@ -300,66 +291,66 @@ function KRT.KWR:GetLAMSubmenu()
         {
           type = "checkbox",
           name = "Enable On-Screen Notification",
-          getFunc = function() return SV().kwr.showCSA end,
-          setFunc = function(v) SV().kwr.showCSA = v; if not v then KRT.KWR:HideBigNow() end end,
+          getFunc = function() return SV().showCSA end,
+          setFunc = function(v) SV().showCSA = v; if not v then KRT.KWR:HideBigNow() end end,
           width = "full",
-          disabled = function() return not SV().kwr.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "checkbox",
           name = "Enable Chat Notifications",
-          getFunc = function() return SV().kwr.showChat end,
-          setFunc = function(v) SV().kwr.showChat = v end,
+          getFunc = function() return SV().showChat end,
+          setFunc = function(v) SV().showChat = v end,
           width = "full",
-          disabled = function() return not SV().kwr.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "checkbox",
           name = "Enable Repositioning (Drag)",
           tooltip = "Keeps the notification on screen so it can be dragged to a new position.",
-          getFunc = function() return SV().kwr.keepVisible end,
+          getFunc = function() return SV().keepVisible end,
           setFunc = function(v)
-            SV().kwr.keepVisible = v
+            SV().keepVisible = v
             KRT.KWR:EnsureOverlay()
-            if v and SV().kwr.showCSA then
+            if v and SV().showCSA then
               KRT.KWR:ShowBigMovable(KRT.KWR.ui.lastMessage or "Reset notification will appear here")
             else
               KRT.KWR:HideBigNow()
             end
           end,
           width = "full",
-          disabled = function() return not SV().kwr.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "button",
           name = "Reset Horizontal Position",
-          func = function() SV().kwr.posX = 0; KRT.KWR:ApplyOverlayPosition() end,
+          func = function() SV().posX = 0; KRT.KWR:ApplyOverlayPosition() end,
           width = "half",
-          disabled = function() return not SV().kwr.enabled or not SV().kwr.keepVisible end,
+          disabled = function() return not SV().enabled or not SV().keepVisible end,
         },
         {
           type = "button",
           name = "Reset Vertical Position",
-          func = function() SV().kwr.posY = DEFAULTS.kwr.posY; KRT.KWR:ApplyOverlayPosition() end,
+          func = function() SV().posY = DEFAULTS.kwr.posY; KRT.KWR:ApplyOverlayPosition() end,
           width = "half",
-          disabled = function() return not SV().kwr.enabled or not SV().kwr.keepVisible end,
+          disabled = function() return not SV().enabled or not SV().keepVisible end,
         },
         {
           type = "colorpicker",
           name = "Notification Color",
           getFunc = function()
-            local c = SV().kwr.color
+            local c = SV().color
             return c.r, c.g, c.b
           end,
           setFunc = function(r, g, b)
-            local c = SV().kwr.color
+            local c = SV().color
             c.r, c.g, c.b = r, g, b
-            if SV().kwr.keepVisible and SV().kwr.showCSA then
+            if SV().keepVisible and SV().showCSA then
               KRT.KWR:ShowBigMovable(KRT.KWR.ui.lastMessage or "Reset notification will appear here")
             end
           end,
           width = "full",
-          disabled = function() return not SV().kwr.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "slider",
@@ -367,14 +358,14 @@ function KRT.KWR:GetLAMSubmenu()
           min = 50,
           max = 200,
           step = 5,
-          getFunc = function() return math.floor((SV().kwr.textScale or 1.0) * 100 + 0.5) end,
+          getFunc = function() return math.floor((SV().textScale or 1.0) * 100 + 0.5) end,
           setFunc = function(v)
-            SV().kwr.textScale = zo_clamp((tonumber(v) or 100) / 100, 0.5, 2.0)
+            SV().textScale = zo_clamp((tonumber(v) or 100) / 100, 0.5, 2.0)
             KRT.KWR:EnsureOverlay()
             KRT.KWR:ApplyTextScale()
           end,
           width = "full",
-          disabled = function() return not SV().kwr.enabled end,
+          disabled = function() return not SV().enabled end,
         },
         {
           type = "slider",
@@ -382,10 +373,10 @@ function KRT.KWR:GetLAMSubmenu()
           min = 1,
           max = 10,
           step = 1,
-          getFunc = function() return math.floor((SV().kwr.lifespanMs or 5000) / 1000) end,
-          setFunc = function(v) SV().kwr.lifespanMs = v * 1000 end,
+          getFunc = function() return math.floor((SV().lifespanMs or 5000) / 1000) end,
+          setFunc = function(v) SV().lifespanMs = v * 1000 end,
           width = "full",
-          disabled = function() return not SV().kwr.enabled end,
+          disabled = function() return not SV().enabled end,
         },
       },
     }
