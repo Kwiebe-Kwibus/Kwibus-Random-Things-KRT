@@ -12,7 +12,7 @@ Instead of running a dozen disparate standalone addons for small interface tweak
 
 ## Download & Links
 
-* **ESOUI Download**: [Kwibus Random Things (KRT) on ESOUI (info4450)](https://www.esoui.com/downloads/info4450-KwibusRandomThingsKRT.html)
+* **ESOUI Download**: [Kwibus Random Things (KRT) on ESOUI](https://www.esoui.com/downloads/info4450-KwibusRandomThingsKRT.html)
 * **GitHub Repository**: [Kwibus-Random-Things-KRT](https://github.com/Kwiebe-Kwibus/Kwibus-Random-Things-KRT)
 
 ---
