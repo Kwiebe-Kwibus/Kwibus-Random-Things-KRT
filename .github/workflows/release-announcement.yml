@@ -5,21 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   notify-discord:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
       - name: Generate Discord Payload
         env:
           RELEASE_NAME: ${{ github.event.release.name }}
@@ -30,7 +19,7 @@ jobs:
           REPO_NAME: ${{ github.repository }}
           PUBLISHED_AT: ${{ github.event.release.published_at }}
         run: |
-          python - << 'EOF'
+          python3 - << 'EOF'
           import json
           import os
           from datetime import datetime, timezone
